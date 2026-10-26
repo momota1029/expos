@@ -1,0 +1,85 @@
+[package]
+name = "gpui-filer-v6"
+version = "0.1.0-beta.1"
+license = "GPL-3.0-only"
+edition = "2024"
+default-run = "gpui-filer-v6"
+
+[features]
+everything-private-ipc-test = []
+
+[dependencies]
+async-lock = "3.4"
+async-channel = "2.5"
+trash = { version = "5.2.5", default-features = false, features = ["coinit_multithreaded"] }
+# 更新日時の整形に使う。v5 は Windows API を直接呼んでいたが、
+# OS 差を吸収できる chrono に寄せて v6 側で一本化する。
+chrono = { version = "0.4", default-features = true }
+encoding_rs = "0.8.35"
+# セッションの保存形式。C2a は形式と検証だけを閉じ、live 保存は C2b で接続する。
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+getrandom = "0.3"
+# 外部 keymap の形式。v5 と同じ TOML を使う。
+toml = "0.8"
+sha2 = "0.10"
+crc32fast = "1"
+flate2 = "1"
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
+kamadak-exif = "0.6.1"
+# フォルダ変更の監視。v5 と同じ crate を使うが、v5 の crate は import しない。
+notify = "8"
+image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp", "ico", "tiff"] }
+gpui = { git = "https://github.com/momota1029/zed", rev = "35a98c66545ed375d6f8e34b193956d4fc5f5362", version = "=0.2.2" }
+raw-window-handle = "0.6"
+gpui_windows = { git = "https://github.com/momota1029/zed", rev = "35a98c66545ed375d6f8e34b193956d4fc5f5362", version = "=0.1.0" }
+gpui-filer-input = { path = "crates/input-routing" }
+gpui-filer-resources = { path = "crates/resources" }
+gpui-filer-ui = { path = "crates/ui-components" }
+gpui-filer-virtual-list = { path = "crates/virtual-list" }
+gpui_drag_ghost = { package = "gpui_drag_ghost_v6", path = "crates/drag-ghost" }
+# v5 と同じサムネイル生成エンジン。image / psd / clip / kra / mdp / ffmpeg を順に試す。
+thumb-engine = { path = "crates/thumb-engine" }
+win_shell_dnd = { path = "crates/win_shell_dnd" }
+
+[dev-dependencies]
+tempfile = "3"
+gpui = { git = "https://github.com/momota1029/zed", rev = "35a98c66545ed375d6f8e34b193956d4fc5f5362", version = "=0.2.2", features = ["test-support"] }
+
+[[test]]
+name = "everything_search_helper"
+path = "tests/everything_search_helper.rs"
+harness = false
+
+[target.'cfg(windows)'.dependencies]
+everything-ipc = { version = "0.1.2", features = ["folder"] }
+# Windows-rsのimplement macroは crate-local な windows_core に依存するため、v6のCOM実装を0.62へ揃える。
+windows-core = "0.62"
+windows_062 = { package = "windows", version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
+# Win32_Foundation / Win32_Security はテストで排他 open を作るために足してある
+# （CloseHandle, HANDLE, CreateFileW）。
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_DataExchange", "Win32_System_Diagnostics_Debug", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_Pipes", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
+
+[workspace]
+resolver = "2"
+members = [
+  ".",
+  "crates/win_shell_dnd",
+  "crates/thumb-engine",
+  "crates/resources",
+  "crates/input-routing",
+  "crates/ui-components",
+  "crates/virtual-list",
+  "crates/drag-ghost",
+]
+default-members = ["."]
+exclude = [
+  "crates/gpui_drag_ghost",
+  "vendor/zed",
+]
+
+[patch.crates-io]
+gpui = { git = "https://github.com/momota1029/zed", rev = "d548bf9f99", version = "=0.2.2" }
+
+[patch."https://github.com/zed-industries/zed"]
+gpui = { git = "https://github.com/momota1029/zed", rev = "d548bf9f99", version = "=0.2.2" }

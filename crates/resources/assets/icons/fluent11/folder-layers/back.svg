@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="32px"
+   height="32px"
+   viewBox="0 0 32 32"
+   version="1.1"
+   id="svg15"
+   sodipodi:docname="folder-back.svg"
+   inkscape:version="1.4.3 (0d15f75, 2025-12-25)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview15"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     showgrid="true"
+     inkscape:zoom="26.65625"
+     inkscape:cx="16.018757"
+     inkscape:cy="16"
+     inkscape:window-width="1848"
+     inkscape:window-height="1055"
+     inkscape:window-x="65"
+     inkscape:window-y="-7"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="surface1">
+    <inkscape:grid
+       id="grid15"
+       units="px"
+       originx="0"
+       originy="0"
+       spacingx="1"
+       spacingy="1"
+       empcolor="#0099e5"
+       empopacity="0.30196078"
+       color="#0099e5"
+       opacity="0.14901961"
+       empspacing="5"
+       enabled="true"
+       visible="true" />
+  </sodipodi:namedview>
+  <defs
+     id="defs10">
+    <linearGradient
+       id="linear0"
+       gradientUnits="userSpaceOnUse"
+       x1="1"
+       y1="19"
+       x2="31"
+       y2="19">
+      <stop
+         offset="0"
+         style="stop-color:rgb(99.607843%,74.901961%,9.411765%);stop-opacity:1;"
+         id="stop1" />
+      <stop
+         offset="1"
+         style="stop-color:rgb(93.72549%,71.764706%,18.823529%);stop-opacity:1;"
+         id="stop2" />
+    </linearGradient>
+    <linearGradient
+       id="linear1"
+       gradientUnits="userSpaceOnUse"
+       x1="16"
+       y1="13.6806"
+       x2="16"
+       y2="11.7659"
+       gradientTransform="translate(0,-2)">
+      <stop
+         offset="0"
+         style="stop-color:rgb(99.607843%,74.901961%,9.411765%);stop-opacity:1;"
+         id="stop3" />
+      <stop
+         offset="1"
+         style="stop-color:rgb(93.72549%,71.764706%,18.823529%);stop-opacity:1;"
+         id="stop4" />
+    </linearGradient>
+    <linearGradient
+       id="linear2"
+       gradientUnits="userSpaceOnUse"
+       x1="7.8464"
+       y1="9"
+       x2="7.8464"
+       y2="12">
+      <stop
+         offset="0"
+         style="stop-color:rgb(0%,0%,0%);stop-opacity:0;"
+         id="stop5" />
+      <stop
+         offset="1"
+         style="stop-color:rgb(0%,0%,0%);stop-opacity:0.2;"
+         id="stop6" />
+    </linearGradient>
+    <linearGradient
+       id="linear3"
+       gradientUnits="userSpaceOnUse"
+       x1="9.6168"
+       y1="11.1644"
+       x2="26.2236"
+       y2="27.7712">
+      <stop
+         offset="0"
+         style="stop-color:rgb(100%,89.803922%,60%);stop-opacity:1;"
+         id="stop7" />
+      <stop
+         offset="1"
+         style="stop-color:rgb(100%,78.823529%,21.960784%);stop-opacity:1;"
+         id="stop8" />
+    </linearGradient>
+    <filter
+       id="alpha"
+       filterUnits="objectBoundingBox"
+       x="0"
+       y="0"
+       width="1"
+       height="1">
+      <feColorMatrix
+         type="matrix"
+         in="SourceGraphic"
+         values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1 0"
+         id="feColorMatrix8" />
+    </filter>
+    <mask
+       id="mask0">
+      <g
+         filter="url(#alpha)"
+         id="g8">
+        <rect
+           x="0"
+           y="0"
+           width="32"
+           height="32"
+           style="fill:rgb(0%,0%,0%);fill-opacity:0.301961;stroke:none;"
+           id="rect8" />
+      </g>
+    </mask>
+    <linearGradient
+       id="linear4"
+       gradientUnits="userSpaceOnUse"
+       x1="1"
+       y1="10.7"
+       x2="31"
+       y2="10.7">
+      <stop
+         offset="0.5196"
+         style="stop-color:rgb(100%,100%,100%);stop-opacity:1;"
+         id="stop9" />
+      <stop
+         offset="1"
+         style="stop-color:rgb(99.215686%,74.509804%,9.411765%);stop-opacity:0;"
+         id="stop10" />
+    </linearGradient>
+    <clipPath
+       id="clip1">
+      <rect
+         x="0"
+         y="0"
+         width="32"
+         height="32"
+         id="rect10" />
+    </clipPath>
+    <g
+       id="surface5"
+       clip-path="url(#clip1)">
+      <path
+         style=" stroke:none;fill-rule:nonzero;fill:url(#linear4);"
+         d="M 30.636719 8.511719 C 30.441406 8.207031 30.113281 8.015625 29.753906 8 L 14.300781 8 C 13.777344 8.863281 13.023438 9.558594 12.121094 10.011719 C 12.109375 10.011719 12.097656 10.007812 12.085938 10.011719 L 2.5 10.011719 C 2.117188 9.972656 1.738281 10.085938 1.4375 10.328125 C 1.171875 10.589844 1.019531 10.945312 1.011719 11.316406 L 1.011719 12.253906 C 1.007812 12.300781 1 12.347656 1 12.394531 L 1 13.398438 C 1 13.351562 1.007812 13.304688 1.011719 13.257812 L 1.011719 12.320312 C 1.019531 11.949219 1.171875 11.59375 1.4375 11.335938 C 1.738281 11.09375 2.117188 10.976562 2.5 11.015625 L 12.085938 11.015625 C 12.097656 11.011719 12.109375 11.015625 12.121094 11.015625 C 13.023438 10.5625 13.777344 9.867188 14.300781 9.003906 L 29.753906 9.003906 C 30.113281 9.019531 30.441406 9.210938 30.636719 9.515625 C 30.878906 9.878906 31.007812 10.3125 31 10.75 L 31 9.746094 C 31.007812 9.304688 30.878906 8.875 30.636719 8.511719 Z M 30.636719 8.511719 "
+         id="path10" />
+    </g>
+  </defs>
+  <g
+     id="surface1">
+    <path
+       style="fill:url(#linear1);fill-rule:nonzero;stroke:none"
+       d="M 29.757812,5 H 13.941406 L 12.558594,3.066406 C 12.09375,2.414062 11.355469,2.019531 10.558594,2 H 2.261719 c -0.785157,0.113281 -1.335938,0.832031 -1.25,1.621094 V 24.894938 C 1.007812,24.953532 1,25.012126 1,25.074626 v 1.96875 H 31 V 6.726562 C 31,5.820312 30.445312,5.007812 29.757812,5 Z"
+       id="path13"
+       sodipodi:nodetypes="cccccccsccsc" />
+  </g>
+</svg>

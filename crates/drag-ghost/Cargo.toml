@@ -1,0 +1,21 @@
+[package]
+name = "gpui_drag_ghost_v6"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+publish = false
+description = "v6 GPUI build of the shared Windows drag ghost source"
+
+[lib]
+name = "gpui_drag_ghost"
+path = "../gpui_drag_ghost/src/lib.rs"
+
+[dependencies]
+gpui = { git = "https://github.com/momota1029/zed", rev = "35a98c66545ed375d6f8e34b193956d4fc5f5362", version = "=0.2.2" }
+
+[target.'cfg(windows)'.dependencies]
+raw-window-handle = "0.6"
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }

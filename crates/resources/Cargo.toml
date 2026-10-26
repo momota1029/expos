@@ -1,0 +1,9 @@
+[package]
+name = "gpui-filer-resources"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+
+[dependencies]
+anyhow = "1"
+gpui = { git = "https://github.com/momota1029/zed", rev = "35a98c66545ed375d6f8e34b193956d4fc5f5362", version = "=0.2.2" }

@@ -1,0 +1,7 @@
+/target/
+/.local/
+/scripts/
+/tools/
+/crates/input-routing/README.md
+/crates/resources/README.md
+/crates/virtual-list/README.md

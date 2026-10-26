@@ -1,0 +1,19 @@
+[package]
+name = "gpui_drag_ghost"
+version = "0.1.0"
+edition = "2024"
+description = "Turn any GPUI Render entity into a cursor-following drag ghost window (Windows)"
+
+[lib]
+name = "gpui_drag_ghost"
+path = "src/lib.rs"
+
+[dependencies]
+gpui = { git = "https://github.com/momota1029/zed", rev = "24227ae91071befd789f642779777ca1d5eaed1f", version = "=0.2.2" }
+
+[target.'cfg(windows)'.dependencies]
+raw-window-handle = "0.6"
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }
