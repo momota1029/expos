@@ -1,9 +1,9 @@
 [package]
-name = "gpui-filer-v6"
+name = "expos"
 version = "0.1.0-beta.1"
 license = "GPL-3.0-only"
 edition = "2024"
-default-run = "gpui-filer-v6"
+default-run = "expos"
 
 [features]
 everything-private-ipc-test = []

@@ -975,7 +975,7 @@ For these and/or other purposes and motivations, and without any expectation of 
      d. Affirmer understands and acknowledges that Creative Commons is not a party to this document and has no duty or obligation with respect to this CC0 or use of the Work. 
 
 ========================================================================
-GPL-3.0-only: gpui_drag_ghost_v6 0.1.0, gpui-filer-input 0.1.0, gpui-filer-resources 0.1.0, gpui-filer-ui 0.1.0, gpui-filer-v6 0.1.0-beta.1, gpui-filer-virtual-list 0.1.0, thumb-engine 0.1.0, win_shell_dnd 0.1.0
+GPL-3.0-only: gpui_drag_ghost_v6 0.1.0, gpui-filer-input 0.1.0, gpui-filer-resources 0.1.0, gpui-filer-ui 0.1.0, expos 0.1.0-beta.1, gpui-filer-virtual-list 0.1.0, thumb-engine 0.1.0, win_shell_dnd 0.1.0
 ========================================================================
 GNU GENERAL PUBLIC LICENSE
 Version 3, 29 June 2007
@@ -5839,7 +5839,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 
-Original LICENSE for gpui-filer-v6 0.1.0-beta.1
+Original LICENSE for expos 0.1.0-beta.1
 GNU GENERAL PUBLIC LICENSE
                        Version 3, 29 June 2007
 

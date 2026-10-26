@@ -1130,6 +1130,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "expos"
+version = "0.1.0-beta.1"
+dependencies = [
+ "async-channel",
+ "async-lock",
+ "chrono",
+ "crc32fast",
+ "encoding_rs",
+ "everything-ipc",
+ "flate2",
+ "getrandom 0.3.4",
+ "gpui",
+ "gpui-filer-input",
+ "gpui-filer-resources",
+ "gpui-filer-ui",
+ "gpui-filer-virtual-list",
+ "gpui_drag_ghost_v6",
+ "gpui_windows",
+ "image",
+ "kamadak-exif",
+ "notify",
+ "raw-window-handle",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thumb-engine",
+ "toml 0.8.23",
+ "trash",
+ "win_shell_dnd",
+ "windows 0.58.0",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
+ "zip",
+]
+
+[[package]]
 name = "exr"
 version = "1.74.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1618,43 +1655,6 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "gpui-filer-resources",
-]
-
-[[package]]
-name = "gpui-filer-v6"
-version = "0.1.0-beta.1"
-dependencies = [
- "async-channel",
- "async-lock",
- "chrono",
- "crc32fast",
- "encoding_rs",
- "everything-ipc",
- "flate2",
- "getrandom 0.3.4",
- "gpui",
- "gpui-filer-input",
- "gpui-filer-resources",
- "gpui-filer-ui",
- "gpui-filer-virtual-list",
- "gpui_drag_ghost_v6",
- "gpui_windows",
- "image",
- "kamadak-exif",
- "notify",
- "raw-window-handle",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thumb-engine",
- "toml 0.8.23",
- "trash",
- "win_shell_dnd",
- "windows 0.58.0",
- "windows 0.62.2",
- "windows-core 0.62.2",
- "zip",
 ]
 
 [[package]]

@@ -1,0 +1,142 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v-prefixed version tag to package
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manual-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - name: Check out the requested tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Validate tag, commit, and package version
+        id: validate
+        shell: pwsh
+        run: |
+          $tag = $env:RELEASE_TAG
+          $tagPattern = '^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$'
+          if ($tag -cnotmatch $tagPattern) {
+            throw 'Tag must be a v-prefixed semantic version.'
+          }
+
+          $head = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Could not resolve checked-out commit.' }
+          $tagCommit = (& git rev-parse "refs/tags/$tag^{commit}").Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'The requested tag does not resolve to a commit.' }
+          if ($head -ne $tagCommit) {
+            throw 'The requested tag does not point to the checked-out commit.'
+          }
+
+          $metadataText = & cargo metadata --locked --no-deps --format-version 1
+          if ($LASTEXITCODE -ne 0) { throw 'Cargo metadata failed.' }
+          $metadata = ($metadataText -join "`n") | ConvertFrom-Json
+          $packages = @($metadata.packages | Where-Object { $_.name -ceq 'expos' })
+          if ($packages.Count -ne 1) { throw 'Expected exactly one expos package in the workspace.' }
+          $tagVersion = $tag.Substring(1)
+          if ($packages[0].version -cne $tagVersion) {
+            throw "Tag version $tagVersion does not match Cargo package version $($packages[0].version)."
+          }
+          "commit=$head" >> $env:GITHUB_OUTPUT
+          "version=$tagVersion" >> $env:GITHUB_OUTPUT
+          $prereleaseVersion = $tagVersion -replace '\+.*$', ''
+          $isPrerelease = $prereleaseVersion.Contains('-').ToString().ToLowerInvariant()
+          "prerelease=$isPrerelease" >> $env:GITHUB_OUTPUT
+
+      - name: Build and package committed source
+        shell: pwsh
+        run: ./release/Package-Release.ps1 -Tag $env:RELEASE_TAG
+
+      - name: Refuse to overwrite an existing release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releaseTags = @(& gh api --paginate --jq '.[].tag_name' "repos/$env:GITHUB_REPOSITORY/releases")
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not query existing releases; refusing to publish.'
+          }
+          if ($releaseTags -ccontains $env:RELEASE_TAG) {
+            throw 'A GitHub release already exists for this tag; refusing to overwrite it.'
+          }
+
+      - name: Verify remote tag still points to the checked-out commit
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_COMMIT: ${{ steps.validate.outputs.commit }}
+        run: |
+          $repository = $env:GITHUB_REPOSITORY
+          $tag = $env:RELEASE_TAG
+          $ref = & gh api --jq '[.object.type, .object.sha] | @tsv' "repos/$repository/git/ref/tags/$tag"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the remote tag; refusing to publish.' }
+          $parts = ($ref -join '') -split "`t"
+          if ($parts.Count -ne 2) { throw 'Remote tag response was malformed; refusing to publish.' }
+          $objectType = $parts[0]
+          $objectSha = $parts[1]
+          for ($depth = 0; $depth -lt 10; $depth++) {
+            if ($objectType -eq 'commit') {
+              if ($objectSha -cne $env:EXPECTED_COMMIT) {
+                throw 'The remote tag no longer points to the checked-out commit.'
+              }
+              break
+            }
+            if ($objectType -ne 'tag') { throw 'Remote tag does not resolve to a commit.' }
+            $tagObject = & gh api --jq '[.object.type, .object.sha] | @tsv' "repos/$repository/git/tags/$objectSha"
+            if ($LASTEXITCODE -ne 0) { throw 'Could not dereference the remote annotated tag.' }
+            $parts = ($tagObject -join '') -split "`t"
+            if ($parts.Count -ne 2) { throw 'Remote annotated tag response was malformed.' }
+            $objectType = $parts[0]
+            $objectSha = $parts[1]
+          }
+          if ($objectType -ne 'commit') { throw 'Remote annotated tag nesting exceeded the supported limit.' }
+          if ($objectSha -cne $env:EXPECTED_COMMIT) {
+            throw 'The remote tag no longer points to the checked-out commit.'
+          }
+
+      - name: Create draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IS_PRERELEASE: ${{ steps.validate.outputs.prerelease }}
+        run: |
+          $arguments = @(
+            'release', 'create', $env:RELEASE_TAG,
+            '--draft',
+            '--verify-tag',
+            '--title', $env:RELEASE_TAG,
+            '--generate-notes'
+          )
+          if ($env:IS_PRERELEASE -eq 'true') {
+            $arguments += '--prerelease'
+          }
+          $assets = @(Get-ChildItem -LiteralPath 'release/dist' -File | Sort-Object Name | ForEach-Object { $_.FullName })
+          if ($assets.Count -ne 3) { throw 'Expected two ZIP archives and one SHA256SUMS file.' }
+          $arguments += $assets
+          & gh @arguments
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub draft release creation failed.' }

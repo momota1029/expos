@@ -2935,7 +2935,7 @@ mod tests {
             .parent()
             .and_then(Path::parent)
             .expect("unit-test executable must be under target/<triple>/debug/deps")
-            .join("gpui-filer-v6.exe");
+            .join("expos.exe");
         assert!(
             app_executable.is_file(),
             "build the private-test app binary in the same target directory: {}",

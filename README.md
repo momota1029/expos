@@ -11,8 +11,8 @@ Archive browsing covers ZIP files and, when an optional 7-Zip provider is availa
 Install a Rust toolchain with Cargo and build from the repository root in PowerShell:
 
 ```powershell
-cargo run -p gpui-filer-v6
-cargo build -p gpui-filer-v6
+cargo run -p expos
+cargo build -p expos
 ```
 
 The application stores settings, session state, operation history, themes, and caches under `%LOCALAPPDATA%/gpui-filer/v6/`.
@@ -28,3 +28,9 @@ File operations can end partially: some items may complete while another item fa
 Drag and drop has partial coverage. Physical Windows validation remains incomplete for several OLE routes and failure cases. Touch and pen behavior also has outstanding physical-device validation; support varies by gesture.
 
 This is a beta build with validation gaps. See `RELEASE_NOTES.md` for current known limitations.
+
+## Creating a draft release
+
+Maintainers can create a draft Windows release from GitHub Actions by running the **Release** workflow manually and entering an existing `v`-prefixed version tag. The workflow checks that the local and remote tag point to its checked-out commit and that its version matches the `expos` package version in `Cargo.toml`. It packages only the committed tag contents, builds the x86_64 Windows application, includes `RELEASE_NOTES.md` and bundled artwork attribution, vendors the locked Rust dependencies into a source archive, and uploads SHA-256 checksums with both archives.
+
+The workflow refuses to reuse an existing GitHub release. It creates a draft and marks semantic-version prereleases as prereleases; a maintainer should review the generated release notes and assets before publishing the draft. The vendored source archive includes `.cargo/config.toml` configured for offline Cargo use, the locked dependency sources, and the source tree from the tag.
