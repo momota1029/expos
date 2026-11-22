@@ -367,11 +367,9 @@ impl StoreFile {
     }
 
     pub fn default_for_app() -> Option<Self> {
-        std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .map(|root| Self {
-                path: root.join("gpui-filer/v6/folder-view-preferences-v1.json"),
-            })
+        Some(Self {
+            path: crate::app_paths::config_dir()?.join("folder-view-preferences-v1.json"),
+        })
     }
 
     pub fn load(&self) -> Result<Snapshot, LoadError> {

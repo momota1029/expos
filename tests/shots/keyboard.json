@@ -1,0 +1,10 @@
+{
+  "comment": "矢印キーで一覧の選択を移動した状態を撮影する。",
+  "steps": [
+    {"action": "size", "width": 1280, "height": 800},
+    {"action": "theme", "theme": "dark"},
+    {"action": "wait_idle"},
+    {"action": "key", "keys": "down down"},
+    {"action": "screenshot", "name": "keyboard-selection"}
+  ]
+}

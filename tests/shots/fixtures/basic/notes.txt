@@ -1,0 +1,3 @@
+expos screenshot fixture
+
+Rows, tiles, and icons show the same directory entries.

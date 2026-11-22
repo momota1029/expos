@@ -1,0 +1,15 @@
+{
+  "comment": "同一ディレクトリの行・タイル・アイコン表示を比較する。",
+  "steps": [
+    {"action": "size", "width": 1280, "height": 800},
+    {"action": "theme", "theme": "dark"},
+    {"action": "view", "mode": "rows"},
+    {"action": "screenshot", "name": "rows"},
+    {"action": "view", "mode": "tiles"},
+    {"action": "wait", "ms": 250},
+    {"action": "screenshot", "name": "tiles"},
+    {"action": "view", "mode": "icons"},
+    {"action": "wait", "ms": 250},
+    {"action": "screenshot", "name": "icons"}
+  ]
+}

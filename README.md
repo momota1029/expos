@@ -15,7 +15,17 @@ cargo run -p expos
 cargo build -p expos
 ```
 
-The application stores settings, session state, operation history, themes, and caches under `%LOCALAPPDATA%/gpui-filer/v6/`.
+On Windows, the application stores settings, session state, operation history, themes, and caches under `%LOCALAPPDATA%/gpui-filer/v6/`.
+
+On Linux and other non-Windows platforms, expos uses these XDG directories. Unset, empty, or relative XDG values use the listed defaults.
+
+| Contents | Directory | Default |
+| --- | --- | --- |
+| Keymaps, custom themes, and the folder-preference file | `$XDG_CONFIG_HOME/expos/` | `~/.config/expos/` |
+| Session and operation journal paths, including recovery records | `$XDG_STATE_HOME/expos/` | `~/.local/state/expos/` |
+| Thumbnail cache | `$XDG_CACHE_HOME/expos/` | `~/.cache/expos/` |
+
+Application options such as the selected theme and language are saved with the session. Session and journal persistence and per-folder preference updates are currently Windows-only.
 
 ## Video preview support
 

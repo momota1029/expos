@@ -22,7 +22,7 @@ use std::time::Instant;
 const MAX_WRITE_ATTEMPTS: u32 = 3;
 const WRITE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
 
-/// 保存先を決められなかった。`LOCALAPPDATA` が無い環境。
+/// アプリの状態ディレクトリを決められなかった。
 const NO_LOCATION: &str = "保存先を決められません";
 
 /// 復元を受け取らない最小の window 寸法。
@@ -634,11 +634,11 @@ fn open_folder_preferences() -> (
 ) {
     use crate::folder_view_preferences::{LoadError, StoreFile, Writer};
     let Some(file) = StoreFile::default_for_app() else {
-        return (
-            Default::default(),
-            None,
-            Some("folder preferences: LOCALAPPDATA is unavailable".into()),
-        );
+        #[cfg(windows)]
+        let notice = "folder preferences: LOCALAPPDATA is unavailable";
+        #[cfg(not(windows))]
+        let notice = "folder preferences: no absolute XDG_CONFIG_HOME or HOME is available";
+        return (Default::default(), None, Some(notice.into()));
     };
     match file.load() {
         Ok(snapshot) => (snapshot, Some(Writer::start(file)), None),

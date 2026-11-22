@@ -1,6 +1,7 @@
 /target/
 /.local/
-/scripts/
+/scripts/*
+!/scripts/shot.sh
 /tools/
 /crates/input-routing/README.md
 /crates/resources/README.md

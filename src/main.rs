@@ -376,6 +376,8 @@ mod file_info_shortcut;
 mod filesystem_identity;
 mod folder_tree_menu;
 mod folder_view_preferences;
+#[cfg(target_os = "linux")]
+mod headless_shot;
 mod input;
 mod keymap;
 mod listing_status_surface;
@@ -17597,14 +17599,40 @@ fn main() {
             std::process::exit(1);
         }
     }
+    let headless_requested =
+        std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--headless-shot"));
+    #[cfg(not(target_os = "linux"))]
+    if headless_requested {
+        eprintln!("--headless-shot requires Linux and an X11 display");
+        std::process::exit(2);
+    }
+    #[cfg(target_os = "linux")]
+    let (shot, shot_exit) = if headless_requested {
+        match headless_shot::Plan::from_process_args() {
+            Ok(plan) => (Some(plan), Some(Rc::new(Cell::new(1)))),
+            Err(error) => {
+                eprintln!("--headless-shot: {error}");
+                std::process::exit(2);
+            }
+        }
+    } else {
+        (None, None)
+    };
+    #[cfg(target_os = "linux")]
+    let shot_result = shot_exit.clone();
     #[cfg(windows)]
     archive_provider::application_image::initialize();
     Application::with_platform(platform::current_platform())
         .with_assets(ResourceAssets)
-        .run(|cx: &mut App| {
+        .run(move |cx: &mut App| {
             // Open the optional trace before GPUI begins dispatching input.
-            if ole_diagnostics::initialize() == ole_diagnostics::InitStatus::Failed {
+            if !headless_requested
+                && ole_diagnostics::initialize() == ole_diagnostics::InitStatus::Failed
+            {
                 eprintln!("[v6][ole-trace] setup failed (open-or-writer)");
+            }
+            if headless_requested {
+                cx.set_reduce_motion(true);
             }
             // 7-Zip は任意機能。PATH の検出は UI を止めず、結果だけを世代付きで commit する。
             let archive_provider = archive_provider::ArchiveProviderOwner::default();
@@ -17646,15 +17674,16 @@ fn main() {
                 gpui::KeyBinding::new("ctrl-z", rename_editor::UndoText, Some("RenameInput")),
             ]);
             // 保存は window を作る前に読む。位置と大きさもここで決める。
-            let (startup, session_autosave, folder_preferences) = if demo_requested() {
-                (
-                    persistence::Startup::disabled(),
-                    persistence::SessionAutosaveOwner::disabled(),
-                    persistence::FolderPreferencesOwner::disabled(),
-                )
-            } else {
-                persistence::open()
-            };
+            let (startup, session_autosave, folder_preferences) =
+                if headless_requested || demo_requested() {
+                    (
+                        persistence::Startup::disabled(),
+                        persistence::SessionAutosaveOwner::disabled(),
+                        persistence::FolderPreferencesOwner::disabled(),
+                    )
+                } else {
+                    persistence::open()
+                };
             // Session の writer は Shell ごとではなく、この Application が一つだけ持つ。
             cx.set_global(session_autosave);
             cx.set_global(show_hidden_items::ShowHiddenItems(
@@ -17679,13 +17708,17 @@ fn main() {
             // 起動時も active snapshot を一度だけ commit する。無いファイルは defaults のまま、
             // 壊れたファイルは defaults と診断を残す。
             let keymap_runtime = std::sync::Arc::new(input::KeymapRuntime::new());
-            let prepared = input::KeymapRuntime::prepare(
-                0,
-                keymap::load(app_paths::keymap_file(), input::KEYMAP_TABLE),
-            );
-            let keymap_notices = match keymap_runtime.commit(0, prepared) {
-                input::CommitResult::Applied { .. } | input::CommitResult::Stale => Vec::new(),
-                input::CommitResult::Rejected { diagnostics, .. } => diagnostics,
+            let keymap_notices = if headless_requested {
+                Vec::new()
+            } else {
+                let prepared = input::KeymapRuntime::prepare(
+                    0,
+                    keymap::load(app_paths::keymap_file(), input::KEYMAP_TABLE),
+                );
+                match keymap_runtime.commit(0, prepared) {
+                    input::CommitResult::Applied { .. } | input::CommitResult::Stale => Vec::new(),
+                    input::CommitResult::Rejected { diagnostics, .. } => diagnostics,
+                }
             };
             let mut windows = startup
                 .restore
@@ -17707,9 +17740,15 @@ fn main() {
                 .map(|snapshot| snapshot.active_window);
             windows.sort_by_key(|window| (Some(window.id) == active_window, window.id));
             let mut restore_complete = true;
+            #[cfg(target_os = "linux")]
+            let mut shot = shot.zip(shot_result);
             for saved_window in windows {
+                #[cfg(target_os = "linux")]
+                let shot_startup = shot.as_ref().map(|(plan, _)| plan);
                 let initial =
                     persistence::InitialWindow::restore_window(saved_window.window.as_ref(), cx);
+                #[cfg(target_os = "linux")]
+                let initial = shot_startup.map_or(initial, headless_shot::Plan::initial_window);
                 let options = WindowOptions {
                     window_bounds: Some(initial.bounds),
                     display_id: initial.display,
@@ -17730,6 +17769,16 @@ fn main() {
                 }
                 let handle = match cx.open_window(options, |_window, cx| {
                     cx.new(|cx| {
+                        #[cfg(target_os = "linux")]
+                        if let Some(plan) = shot_startup {
+                            return shell::FilerShell::new_with_directory(
+                                window_startup,
+                                keymap_runtime.clone(),
+                                keymap_notices.clone(),
+                                Some(plan.fixture().to_owned()),
+                                cx,
+                            );
+                        }
                         shell::FilerShell::new(
                             window_startup,
                             keymap_runtime.clone(),
@@ -17765,6 +17814,15 @@ fn main() {
                 if shell_entity.read(cx).restore_incomplete() {
                     restore_complete = false;
                 }
+                #[cfg(target_os = "linux")]
+                if let Some((plan, result)) = shot.take() {
+                    plan.start(handle, result, cx);
+                }
+            }
+            #[cfg(target_os = "linux")]
+            if shot.is_some() {
+                eprintln!("--headless-shot: could not initialize the capture window");
+                cx.quit();
             }
             if !restore_complete {
                 cx.global_mut::<persistence::SessionAutosaveOwner>()
@@ -17778,4 +17836,8 @@ fn main() {
                     .set_active_window(active_window);
             }
         });
+    #[cfg(target_os = "linux")]
+    if let Some(result) = shot_exit {
+        std::process::exit(result.get());
+    }
 }

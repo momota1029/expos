@@ -1,0 +1,12 @@
+{
+  "comment": "同じ一覧をライトとダークの行表示で撮影する。",
+  "steps": [
+    {"action": "size", "width": 1280, "height": 800},
+    {"action": "view", "mode": "rows"},
+    {"action": "theme", "theme": "light"},
+    {"action": "wait_idle"},
+    {"action": "screenshot", "name": "rows-light"},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "rows-dark"}
+  ]
+}

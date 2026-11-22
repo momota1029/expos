@@ -2629,7 +2629,7 @@ impl JournalStore {
         if !SessionFile::WRITES_SUPPORTED {
             return Ok(None);
         }
-        let Some(root) = crate::app_paths::root() else {
+        let Some(root) = crate::app_paths::state_dir() else {
             return Ok(None);
         };
         Self::open(root.join("operations").join("journal-v1.json")).map(Some)

@@ -18,7 +18,7 @@ impl SessionPaths {
         Self { primary, backup }
     }
 
-    /// `%LOCALAPPDATA%/gpui-filer/v6/session/session-v1.json`。
+    /// アプリの状態ディレクトリにある `session/session-v1.json`。
     ///
     /// v5 の設定ファイルを上書き・流用しない。
     pub(crate) fn default_for_app() -> Option<Self> {

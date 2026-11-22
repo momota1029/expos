@@ -313,8 +313,7 @@ pub fn is_video(path: &Path) -> bool {
 fn cache_root() -> Option<PathBuf> {
     // 生成の意味が変わったら版を上げる。v1 は縦横比を保つ縮小で、v2 は Cover の正方形。
     // 版を共有すると、古い見た目のキャッシュがそのまま表示されてしまう。
-    std::env::var_os("LOCALAPPDATA")
-        .map(|root| PathBuf::from(root).join("gpui-filer/v6/thumbnails/v2"))
+    Some(crate::app_paths::cache_dir()?.join("thumbnails").join("v2"))
 }
 
 /// ディスクのファイル名。世代も混ぜる。

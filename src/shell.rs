@@ -2500,6 +2500,16 @@ impl FilerShell {
         keymap_notices: Vec<String>,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::new_with_directory(startup, keymap_runtime, keymap_notices, None, cx)
+    }
+
+    pub(super) fn new_with_directory(
+        startup: persistence::Startup,
+        keymap_runtime: Arc<input::KeymapRuntime>,
+        keymap_notices: Vec<String>,
+        initial_directory: Option<std::path::PathBuf>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let window_id = startup.window_id.max(1);
         if !cx.has_global::<crate::show_hidden_items::ShowHiddenItems>() {
             cx.set_global(crate::show_hidden_items::ShowHiddenItems(
@@ -2517,7 +2527,9 @@ impl FilerShell {
                     .is_none_or(|snapshot| snapshot.item_check_boxes),
             ));
         }
-        let language_override = LanguageOverride::startup(i18n::pseudo_startup_requested());
+        let headless = initial_directory.is_some();
+        let language_override =
+            LanguageOverride::startup(!headless && i18n::pseudo_startup_requested());
         let selected_theme = startup
             .restore
             .as_ref()
@@ -2697,7 +2709,10 @@ impl FilerShell {
             Some(snapshot) => shell.restore(&snapshot, cx),
             None => {
                 let runtime = shell.keymap_runtime.clone();
-                let view = cx.new(|cx| DirectoryListDemo::new(runtime, cx));
+                let view = cx.new(|cx| match initial_directory {
+                    Some(path) => DirectoryListDemo::new_at(runtime, Some(Location::Path(path)), cx),
+                    None => DirectoryListDemo::new(runtime, cx),
+                });
                 view.update(cx, |view, cx| {
                     view.set_translator(shell.translator.clone(), cx);
                     view.set_select_extension_on_rename(shell.select_extension_on_rename)
@@ -2724,7 +2739,11 @@ impl FilerShell {
                 cx.notify();
             }),
         );
-        shell.begin_theme_load(selected_theme, cx);
+        if headless {
+            shell.theme_names = vec!["default".into(), "light".into()];
+        } else {
+            shell.begin_theme_load(selected_theme, cx);
+        }
         shell
     }
 
@@ -2759,16 +2778,32 @@ impl FilerShell {
                 if this.theme_request_ticket != ticket || this.selected_theme != name {
                     return;
                 }
-                this.applied_theme = palette;
                 this.theme_names = names;
-                cx.set_global(palette);
-                for tab in this.workspace.tabs() {
-                    tab.view.update(cx, |_, cx| cx.notify());
-                }
-                cx.notify();
+                this.apply_theme(palette, cx);
             });
         })
         .detach();
+    }
+
+    fn apply_theme(&mut self, palette: gpui_filer_ui::ThemePalette, cx: &mut Context<Self>) {
+        self.applied_theme = palette;
+        cx.set_global(palette);
+        for tab in self.workspace.tabs() {
+            tab.view.update(cx, |_, cx| cx.notify());
+        }
+        cx.notify();
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn apply_shot_theme(
+        &mut self,
+        name: &str,
+        palette: gpui_filer_ui::ThemePalette,
+        cx: &mut Context<Self>,
+    ) {
+        self.theme_request_ticket = self.theme_request_ticket.wrapping_add(1);
+        self.selected_theme = name.to_owned();
+        self.apply_theme(palette, cx);
     }
 
     pub(super) fn select_theme(&mut self, name: String, cx: &mut Context<Self>) {

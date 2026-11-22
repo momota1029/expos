@@ -108,7 +108,7 @@ pub(super) fn safe_name(value: &str) -> Option<&str> {
 }
 
 pub(super) fn directory() -> Option<std::path::PathBuf> {
-    Some(crate::app_paths::root()?.join("themes"))
+    Some(crate::app_paths::config_dir()?.join("themes"))
 }
 
 pub(super) fn list(selected: &str) -> Vec<String> {
