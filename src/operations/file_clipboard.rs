@@ -754,10 +754,13 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn non_windows_read_is_empty_and_write_is_rejected() {
+        assert!(!has_files().unwrap());
         assert_eq!(read().unwrap(), None);
-        assert_eq!(
-            copy(&[PathBuf::from("a")]),
-            Err(ClipboardError::Unsupported)
-        );
+        for effect in [ClipboardEffect::Copy, ClipboardEffect::Move] {
+            assert!(matches!(
+                prepare(&[PathBuf::from("a")], effect),
+                Err(ClipboardError::Unsupported)
+            ));
+        }
     }
 }

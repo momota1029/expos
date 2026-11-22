@@ -84,7 +84,17 @@ pub(super) fn execute(
         total_items: Some(1),
         ..ProgressCounters::default()
     };
+    #[cfg(windows)]
     let result = create_zip(token, request, cancelled, controls, emit, &mut counters);
+    #[cfg(not(windows))]
+    let result = {
+        let _ = controls;
+        if cancelled.load(Ordering::Acquire) {
+            Err(ZipCreateError::Cancelled)
+        } else {
+            Err(ZipCreateError::Unsupported)
+        }
+    };
     let (outcome, item_outcome, output, detail, retry) = match result {
         Ok(path) => {
             counters.processed_items = 1;
@@ -116,6 +126,14 @@ pub(super) fn execute(
             None,
             Some(detail),
             RetryPlan::RequiresReinspection,
+        ),
+        #[cfg(not(windows))]
+        Err(ZipCreateError::Unsupported) => (
+            TerminalOutcome::Failed,
+            ItemOutcome::Failed,
+            None,
+            Some("ZIP creation requires the Windows filesystem adapter".into()),
+            RetryPlan::NotAllowed,
         ),
         Err(error) => (
             TerminalOutcome::Failed,
@@ -206,6 +224,7 @@ fn add_known_file_length(total: Option<u64>, length: Option<u64>) -> Option<u64>
     total?.checked_add(length?)
 }
 
+#[cfg(windows)]
 fn create_zip(
     token: AttemptToken,
     request: &OperationRequest,
@@ -374,9 +393,6 @@ fn create_zip(
             pinned_trees.push(None);
         }
     }
-    #[cfg(not(windows))]
-    let mut pinned_tree: Option<()> = None;
-
     #[cfg(windows)]
     {
         let mut total_bytes = Some(0_u64);
@@ -606,8 +622,6 @@ fn create_zip(
                 }
             }
         }
-        #[cfg(not(windows))]
-        return Err(ZipCreateError::Unsupported);
         let mut stage_file: File = archive.finish()?;
         stage_file.flush()?;
         stage_file.sync_all()?;

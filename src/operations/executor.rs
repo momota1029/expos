@@ -182,6 +182,10 @@ pub enum CopyError {
     Io(String),
 }
 
+fn io(error: impl std::fmt::Display) -> CopyError {
+    CopyError::Io(error.to_string())
+}
+
 /// Tagged facts produced by a detached worker. The caller delivers these to
 /// `OperationService`, which remains the only lifecycle owner.
 #[derive(Clone, Debug)]
@@ -1520,6 +1524,10 @@ fn execute_prepare_inner_with_lease_and_provider(
         });
         return;
     }
+    let recovery_copy = request.kind == OperationKind::Copy
+        && request.move_identity_guard.is_some()
+        && request.copy_destination_identity_guard.is_some()
+        && request.initial_conflict_policy == Some(super::model::ConflictDecision::KeepBoth);
     // 受理時に見たfolder rowと同じdirectory treeへ、path-basedなCopyを固定する。
     // conflict wait中もleaseを保持し、request retryでは同じidentityを再照合する。
     #[cfg(windows)]
@@ -1547,10 +1555,22 @@ fn execute_prepare_inner_with_lease_and_provider(
         };
     #[cfg(not(windows))]
     if request.copy_destination_identity_guard.is_some() {
-        emit(ExecutorFact::Terminal {
-            token,
-            report: rejected(),
-        });
+        let mut report = rejected();
+        if recovery_copy {
+            let (outcome, detail) = copy_outcome(Err(CopyError::Unsupported));
+            report.receipts = request
+                .sources
+                .iter()
+                .enumerate()
+                .filter_map(|(index, source)| {
+                    let item = ItemId(u32::try_from(index).ok()?);
+                    Some(item_receipt(
+                        request.kind, item, source, None, outcome, detail.clone(), None, None,
+                    ))
+                })
+                .collect();
+        }
+        emit(ExecutorFact::Terminal { token, report });
         return;
     }
     // Link作成はdirect/brokerのどちらでもpathを渡すため、captured parentをworker全体でpinする。
@@ -1724,10 +1744,6 @@ fn execute_prepare_inner_with_lease_and_provider(
     let mut exact_directory_replace_no_effect = false;
     // This worker invocation is exactly one attempt.  The policy therefore
     // cannot survive cancellation, terminal completion, retry, or another job.
-    let recovery_copy = request.kind == OperationKind::Copy
-        && request.move_identity_guard.is_some()
-        && request.copy_destination_identity_guard.is_some()
-        && request.initial_conflict_policy == Some(super::model::ConflictDecision::KeepBoth);
     let mut conflict_policy: Option<super::model::ConflictDecision> = request.initial_conflict_policy;
     // Recovery admission validates and pins the complete ordered source set before
     // the first item can mutate the destination. The pins remain live through the
@@ -1764,11 +1780,6 @@ fn execute_prepare_inner_with_lease_and_provider(
     } else {
         None
     };
-    #[cfg(not(windows))]
-    if recovery_copy {
-        emit(ExecutorFact::Terminal { token, report: rejected() });
-        return;
-    }
     let guarded_directory_retry = request.copy_destination_identity_guard.is_some()
         && !copy_directory_retry_guards.is_empty();
     let guarded_file_retry = request.copy_destination_identity_guard.is_some()
@@ -2531,98 +2542,101 @@ fn execute_prepare_inner_with_lease_and_provider(
                         OperationKind::Move => {
                             let on_destination =
                                 |candidate: &Path| resolved_destination = candidate.to_path_buf();
-                            #[cfg(windows)]
-                            if directory_move_cross_volume {
-                                let (source_identity, destination_identity) =
-                                    directory_move_identities
-                                        .as_ref()
-                                        .expect("cross-volume directory Move identities");
-                                let event_sink = std::cell::RefCell::new(&mut emit);
-                                let mut on_bytes = |bytes| {
-                                    counters.processed_bytes =
-                                        counters.processed_bytes.saturating_add(bytes);
-                                    sequence += 1;
-                                    (event_sink.borrow_mut())(ExecutorFact::Progress {
+                            match move_guard {
+                                #[cfg(windows)]
+                                _ if directory_move_cross_volume => {
+                                    let (source_identity, destination_identity) =
+                                        directory_move_identities
+                                            .as_ref()
+                                            .expect("cross-volume directory Move identities");
+                                    let event_sink = std::cell::RefCell::new(&mut emit);
+                                    let mut on_bytes = |bytes| {
+                                        counters.processed_bytes =
+                                            counters.processed_bytes.saturating_add(bytes);
+                                        sequence += 1;
+                                        (event_sink.borrow_mut())(ExecutorFact::Progress {
+                                            token,
+                                            update: ProgressUpdate {
+                                                sequence,
+                                                counters,
+                                                current_item: Some(item),
+                                            },
+                                        });
+                                    };
+                                    let mut emit_fact = |fact| (event_sink.borrow_mut())(fact);
+                                    move_keep_both_cross_volume_directory(
                                         token,
-                                        update: ProgressUpdate {
-                                            sequence,
-                                            counters,
-                                            current_item: Some(item),
+                                        item,
+                                        source,
+                                        destination_path,
+                                        source_identity,
+                                        destination_identity,
+                                        cancelled,
+                                        controls,
+                                        on_destination,
+                                        &mut on_bytes,
+                                        &mut emit_fact,
+                                        request.move_destination_identity_guard.is_some()
+                                            && request.move_identity_guard.is_none(),
+                                    )
+                                }
+                                Some((source_identity, destination_identity)) => {
+                                    move_keep_both_guarded(
+                                        source,
+                                        destination_path,
+                                        source_identity,
+                                        destination_identity,
+                                        cancelled,
+                                        on_destination,
+                                        &mut |receipt| {
+                                            if request.move_destination_identity_guard.is_some()
+                                                && request.move_identity_guard.is_none()
+                                            {
+                                                emit(ExecutorFact::MoveUndoCandidate { token, item, receipt });
+                                            }
                                         },
-                                    });
-                                };
-                                let mut emit_fact = |fact| (event_sink.borrow_mut())(fact);
-                                move_keep_both_cross_volume_directory(
-                                    token,
-                                    item,
-                                    source,
-                                    destination_path,
-                                    source_identity,
-                                    destination_identity,
-                                    cancelled,
-                                    controls,
-                                    on_destination,
-                                    &mut on_bytes,
-                                    &mut emit_fact,
-                                    request.move_destination_identity_guard.is_some()
-                                        && request.move_identity_guard.is_none(),
-                                )
-                            } else if let Some((source_identity, destination_identity)) = move_guard
-                            {
-                                move_keep_both_guarded(
-                                    source,
-                                    destination_path,
-                                    source_identity,
-                                    destination_identity,
-                                    cancelled,
-                                    on_destination,
-                                    &mut |receipt| {
-                                        if request.move_destination_identity_guard.is_some()
-                                            && request.move_identity_guard.is_none()
-                                        {
-                                            emit(ExecutorFact::MoveUndoCandidate { token, item, receipt });
-                                        }
-                                    },
-                                )
-                            } else {
-                                let event_sink = std::cell::RefCell::new(&mut emit);
-                                let mut on_bytes = |bytes| {
-                                    counters.processed_bytes = counters.processed_bytes.saturating_add(bytes);
-                                    sequence += 1;
-                                    (event_sink.borrow_mut())(ExecutorFact::Progress {
-                                        token,
-                                        update: ProgressUpdate { sequence, counters, current_item: Some(item) },
-                                    });
-                                };
-                                let mut on_source_retained = |proof| {
-                                    (event_sink.borrow_mut())(ExecutorFact::PublishedMoveSourceRetained { token, proof });
-                                };
-                                let mut on_disposition = |proof| {
-                                    (event_sink.borrow_mut())(ExecutorFact::PublishedMoveDisposition { token, proof });
-                                };
-                                let mut on_no_effect = |proof| {
-                                    (event_sink.borrow_mut())(ExecutorFact::CrossVolumeMoveNoEffectProof { token, proof });
-                                };
-                                move_keep_both_observed(
-                                    source,
-                                    destination_path,
-                                    cancelled,
-                                    on_destination,
-                                    &mut on_bytes,
-                                    item,
-                                    &mut on_source_retained,
-                    &mut on_disposition,
-                    &mut on_no_effect,
-                    request.move_destination_identity_guard.as_ref(),
-                    clipboard_move_source,
-                    &mut |receipt| {
-                                        if request.move_destination_identity_guard.is_some()
-                                            && request.move_identity_guard.is_none()
-                                        {
-                                            (event_sink.borrow_mut())(ExecutorFact::MoveUndoCandidate { token, item, receipt });
-                                        }
-                                    },
-                                )
+                                    )
+                                }
+                                None => {
+                                    let event_sink = std::cell::RefCell::new(&mut emit);
+                                    let mut on_bytes = |bytes| {
+                                        counters.processed_bytes = counters.processed_bytes.saturating_add(bytes);
+                                        sequence += 1;
+                                        (event_sink.borrow_mut())(ExecutorFact::Progress {
+                                            token,
+                                            update: ProgressUpdate { sequence, counters, current_item: Some(item) },
+                                        });
+                                    };
+                                    let mut on_source_retained = |proof| {
+                                        (event_sink.borrow_mut())(ExecutorFact::PublishedMoveSourceRetained { token, proof });
+                                    };
+                                    let mut on_disposition = |proof| {
+                                        (event_sink.borrow_mut())(ExecutorFact::PublishedMoveDisposition { token, proof });
+                                    };
+                                    let mut on_no_effect = |proof| {
+                                        (event_sink.borrow_mut())(ExecutorFact::CrossVolumeMoveNoEffectProof { token, proof });
+                                    };
+                                    move_keep_both_observed(
+                                        source,
+                                        destination_path,
+                                        cancelled,
+                                        on_destination,
+                                        &mut on_bytes,
+                                        item,
+                                        &mut on_source_retained,
+                                        &mut on_disposition,
+                                        &mut on_no_effect,
+                                        request.move_destination_identity_guard.as_ref(),
+                                        clipboard_move_source,
+                                        &mut |receipt| {
+                                            if request.move_destination_identity_guard.is_some()
+                                                && request.move_identity_guard.is_none()
+                                            {
+                                                (event_sink.borrow_mut())(ExecutorFact::MoveUndoCandidate { token, item, receipt });
+                                            }
+                                        },
+                                    )
+                                }
                             }
                         }
                         OperationKind::CreateSymbolicLink => create_symbolic_link_keep_both(
@@ -3241,6 +3255,7 @@ fn execute_prepare_inner_with_lease_and_provider(
                         }
                     }
                 };
+                #[cfg(windows)]
                 if recovery_copy && copy_directory_retry_guard.is_none()
                     && matches!(result, Err(CopyError::DestinationExists)) {
                     if source_is_directory {
@@ -3302,121 +3317,125 @@ fn execute_prepare_inner_with_lease_and_provider(
             }
             OperationKind::Move => {
                 let destination_path = destination_path.as_ref().expect("move has destination");
-                #[cfg(windows)]
-                if directory_move_cross_volume {
-                    let (source_identity, destination_identity) = directory_move_identities
-                        .as_ref()
-                        .expect("cross-volume directory routing has pinned identities");
-                    let event_sink = std::cell::RefCell::new(&mut emit);
-                    let mut on_bytes = |bytes| {
-                        counters.processed_bytes = counters.processed_bytes.saturating_add(bytes);
-                        sequence += 1;
-                        (event_sink.borrow_mut())(ExecutorFact::Progress {
-                            token,
-                            update: ProgressUpdate {
-                                sequence,
-                                counters,
-                                current_item: Some(item),
-                            },
-                        });
-                    };
-                    let mut emit_fact = |fact| (event_sink.borrow_mut())(fact);
-                    let result = windows::move_cross_volume_directory(
-                        token,
-                        item,
-                        source,
-                        destination_path,
-                        source_identity,
-                        destination_identity,
-                        cancelled,
-                        controls,
-                        &mut on_bytes,
-                        &mut emit_fact,
-                    );
-                    // Runtime は各 item の候補を端末 receipt と照合してから一括で採用する。
-                    if !directory_move_replace_enabled
-                        && let Ok(receipt) = &result
-                    {
-                        (event_sink.borrow_mut())(ExecutorFact::MoveUndoCandidate {
+                match move_guard {
+                    #[cfg(windows)]
+                    _ if directory_move_cross_volume => {
+                        let (source_identity, destination_identity) = directory_move_identities
+                            .as_ref()
+                            .expect("cross-volume directory routing has pinned identities");
+                        let event_sink = std::cell::RefCell::new(&mut emit);
+                        let mut on_bytes = |bytes| {
+                            counters.processed_bytes = counters.processed_bytes.saturating_add(bytes);
+                            sequence += 1;
+                            (event_sink.borrow_mut())(ExecutorFact::Progress {
+                                token,
+                                update: ProgressUpdate {
+                                    sequence,
+                                    counters,
+                                    current_item: Some(item),
+                                },
+                            });
+                        };
+                        let mut emit_fact = |fact| (event_sink.borrow_mut())(fact);
+                        let result = windows::move_cross_volume_directory(
                             token,
                             item,
-                            receipt: receipt.clone(),
-                        });
-                    }
-                    result.map(|_| ())
-                } else if let Some((source_identity, destination_identity)) = move_guard {
-                    let result = move_file_guarded_with_undo(
-                        source,
-                        destination_path,
-                        source_identity,
-                        destination_identity,
-                        cancelled,
-                        &mut |receipt| emit(ExecutorFact::MoveUndoCandidate { token, item, receipt }),
-                    );
-                    if should_emit_guarded_move_no_effect_proof(&result) {
-                        emit(ExecutorFact::GuardedMoveNoEffectProof {
-                            token,
-                            proof: super::model::GuardedMoveNoEffectProof {
+                            source,
+                            destination_path,
+                            source_identity,
+                            destination_identity,
+                            cancelled,
+                            controls,
+                            &mut on_bytes,
+                            &mut emit_fact,
+                        );
+                        // Runtime は各 item の候補を端末 receipt と照合してから一括で採用する。
+                        if !directory_move_replace_enabled
+                            && let Ok(receipt) = &result
+                        {
+                            (event_sink.borrow_mut())(ExecutorFact::MoveUndoCandidate {
+                                token,
                                 item,
-                                source: source.to_path_buf(),
-                                destination: destination_path.to_path_buf(),
-                                source_identity: source_identity.clone(),
-                                destination_parent_identity: destination_identity.clone(),
-                            },
-                        });
-                    }
-                    result
-                } else {
-                    let event_sink = std::cell::RefCell::new(&mut emit);
-                    let on_bytes = |bytes| {
-                        counters.processed_bytes = counters.processed_bytes.saturating_add(bytes);
-                        sequence += 1;
-                        (event_sink.borrow_mut())(ExecutorFact::Progress {
-                            token,
-                            update: ProgressUpdate {
-                                sequence,
-                                counters,
-                                current_item: Some(item),
-                            },
-                        });
-                    };
-                    let mut retained = |proof| (event_sink.borrow_mut())(ExecutorFact::PublishedMoveSourceRetained { token, proof });
-                    let mut disposition = |proof: super::model::PublishedMoveDispositionProof| {
-                        let undo_receipt = proof.content_sha256.as_ref().filter(|hash|
-                            hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
-                                && proof.source_pre_disposition_signature.is_reliable_for_cross_volume_move_retry()
-                                && proof.destination_signature.is_reliable_for_cross_volume_move_retry()
-                        ).map(|content_sha256| super::model::MoveUndoReceipt {
-                            source: proof.source.clone(),
-                            destination: proof.destination.clone(),
-                            object_identity: proof.destination_identity.clone(),
-                            object_kind: super::model::MoveUndoObjectKind::RegularFile,
-                            source_parent_route: proof.source_parent_route.clone(),
-                            destination_parent_route: proof.destination_parent_route.clone(),
-                            cross_volume_file: Some(super::model::CrossVolumeMoveUndoProof {
-                                original_source_identity: proof.source_identity.clone(),
-                                original_source_signature: proof.source_pre_disposition_signature,
-                                destination_signature: proof.destination_signature,
-                                content_sha256: content_sha256.clone(),
-                                directory_manifest: None,
-                            }),
-                        });
-                        (event_sink.borrow_mut())(ExecutorFact::PublishedMoveDisposition { token, proof });
-                        if let Some(receipt) = undo_receipt {
-                            (event_sink.borrow_mut())(ExecutorFact::MoveUndoCandidate { token, item, receipt });
+                                receipt: receipt.clone(),
+                            });
                         }
-                    };
-                    let mut no_effect = |proof| (event_sink.borrow_mut())(ExecutorFact::CrossVolumeMoveNoEffectProof { token, proof });
-                    if let Some(destination_identity) = request.move_destination_identity_guard.as_ref() {
-                        move_file_clipboard_worker_observed_with_undo(
-                            source, destination_path, destination_identity,
-                            clipboard_move_source,
-                            cancelled, on_bytes, item,
-                            cross_volume_move_retry_guard, &mut retained, &mut disposition, &mut no_effect,
-                            &mut |receipt| (event_sink.borrow_mut())(ExecutorFact::MoveUndoCandidate { token, item, receipt }),
-                        )
-                    } else {
-                        move_file_observed(source, destination_path, cancelled, on_bytes, item, cross_volume_move_retry_guard, &mut retained, &mut disposition, &mut no_effect)
+                        result.map(|_| ())
+                    }
+                    Some((source_identity, destination_identity)) => {
+                        let result = move_file_guarded_with_undo(
+                            source,
+                            destination_path,
+                            source_identity,
+                            destination_identity,
+                            cancelled,
+                            &mut |receipt| emit(ExecutorFact::MoveUndoCandidate { token, item, receipt }),
+                        );
+                        if should_emit_guarded_move_no_effect_proof(&result) {
+                            emit(ExecutorFact::GuardedMoveNoEffectProof {
+                                token,
+                                proof: super::model::GuardedMoveNoEffectProof {
+                                    item,
+                                    source: source.to_path_buf(),
+                                    destination: destination_path.to_path_buf(),
+                                    source_identity: source_identity.clone(),
+                                    destination_parent_identity: destination_identity.clone(),
+                                },
+                            });
+                        }
+                        result
+                    }
+                    None => {
+                        let event_sink = std::cell::RefCell::new(&mut emit);
+                        let on_bytes = |bytes| {
+                            counters.processed_bytes = counters.processed_bytes.saturating_add(bytes);
+                            sequence += 1;
+                            (event_sink.borrow_mut())(ExecutorFact::Progress {
+                                token,
+                                update: ProgressUpdate {
+                                    sequence,
+                                    counters,
+                                    current_item: Some(item),
+                                },
+                            });
+                        };
+                        let mut retained = |proof| (event_sink.borrow_mut())(ExecutorFact::PublishedMoveSourceRetained { token, proof });
+                        let mut disposition = |proof: super::model::PublishedMoveDispositionProof| {
+                            let undo_receipt = proof.content_sha256.as_ref().filter(|hash|
+                                hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+                                    && proof.source_pre_disposition_signature.is_reliable_for_cross_volume_move_retry()
+                                    && proof.destination_signature.is_reliable_for_cross_volume_move_retry()
+                            ).map(|content_sha256| super::model::MoveUndoReceipt {
+                                source: proof.source.clone(),
+                                destination: proof.destination.clone(),
+                                object_identity: proof.destination_identity.clone(),
+                                object_kind: super::model::MoveUndoObjectKind::RegularFile,
+                                source_parent_route: proof.source_parent_route.clone(),
+                                destination_parent_route: proof.destination_parent_route.clone(),
+                                cross_volume_file: Some(super::model::CrossVolumeMoveUndoProof {
+                                    original_source_identity: proof.source_identity.clone(),
+                                    original_source_signature: proof.source_pre_disposition_signature,
+                                    destination_signature: proof.destination_signature,
+                                    content_sha256: content_sha256.clone(),
+                                    directory_manifest: None,
+                                }),
+                            });
+                            (event_sink.borrow_mut())(ExecutorFact::PublishedMoveDisposition { token, proof });
+                            if let Some(receipt) = undo_receipt {
+                                (event_sink.borrow_mut())(ExecutorFact::MoveUndoCandidate { token, item, receipt });
+                            }
+                        };
+                        let mut no_effect = |proof| (event_sink.borrow_mut())(ExecutorFact::CrossVolumeMoveNoEffectProof { token, proof });
+                        if let Some(destination_identity) = request.move_destination_identity_guard.as_ref() {
+                            move_file_clipboard_worker_observed_with_undo(
+                                source, destination_path, destination_identity,
+                                clipboard_move_source,
+                                cancelled, on_bytes, item,
+                                cross_volume_move_retry_guard, &mut retained, &mut disposition, &mut no_effect,
+                                &mut |receipt| (event_sink.borrow_mut())(ExecutorFact::MoveUndoCandidate { token, item, receipt }),
+                            )
+                        } else {
+                            move_file_observed(source, destination_path, cancelled, on_bytes, item, cross_volume_move_retry_guard, &mut retained, &mut disposition, &mut no_effect)
+                        }
                     }
                 }
             }
@@ -15816,9 +15835,6 @@ mod windows {
     }
     fn wide(path: &Path) -> Vec<u16> {
         path.as_os_str().encode_wide().chain(Some(0)).collect()
-    }
-    fn io(error: impl std::fmt::Display) -> CopyError {
-        CopyError::Io(error.to_string())
     }
     pub(super) fn raw(file: &std::fs::File) -> HANDLE {
         HANDLE(file.as_raw_handle() as *mut _)

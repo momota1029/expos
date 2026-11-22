@@ -290,10 +290,24 @@ struct SourceStamp {
     length: u64,
     modified_ns: Option<u128>,
     created_ns: Option<u128>,
+    #[cfg(target_os = "linux")]
+    linux_stat: LinuxSourceStat,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct LinuxSourceStat {
+    device: u64,
+    inode: u64,
+    changed_seconds: i64,
+    changed_nanoseconds: i64,
 }
 
 impl SourceStamp {
     fn from_metadata(metadata: &std::fs::Metadata) -> Self {
+        #[cfg(target_os = "linux")]
+        use std::os::unix::fs::MetadataExt;
+
         let timestamp_ns = |time: std::io::Result<SystemTime>| {
             time.ok()
                 .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
@@ -303,6 +317,13 @@ impl SourceStamp {
             length: metadata.len(),
             modified_ns: timestamp_ns(metadata.modified()),
             created_ns: timestamp_ns(metadata.created()),
+            #[cfg(target_os = "linux")]
+            linux_stat: LinuxSourceStat {
+                device: metadata.dev(),
+                inode: metadata.ino(),
+                changed_seconds: metadata.ctime(),
+                changed_nanoseconds: metadata.ctime_nsec(),
+            },
         }
     }
 }
@@ -1410,6 +1431,7 @@ fn decode_bounded_video_png(bytes: &[u8], max_dimension: u32) -> Option<RenderIm
 }
 
 /// Keep static-image decoding and its small LRU independent from text content.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 async fn decode_image(target: Target) -> Option<Decoded> {
     let Some(expected) = target
         .source_identity
@@ -1432,11 +1454,20 @@ async fn decode_image(target: Target) -> Option<Decoded> {
         }
         (pin, source, expected.filesystem_identity())
     };
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = expected;
-        return Some(Decoded::without_lease(Content::Failed));
-    }
+    #[cfg(target_os = "linux")]
+    let (mut pin, source, identity) = {
+        let identity = expected.filesystem_identity();
+        let opened = open_linux_preview_file(&target.path, &identity);
+        if crate::thumbnails::epoch_of(&target.path) != target.epoch {
+            return None;
+        }
+        let Ok((pin, source)) = opened else {
+            return expected
+                .matches_path(&target.path)
+                .then(|| Decoded::with_epoch(Content::Failed, target.path.clone(), target.epoch));
+        };
+        (pin, source, identity)
+    };
     let key = CacheKey {
         entry: target.key.clone(),
         path: target.path.clone(),
@@ -1458,12 +1489,19 @@ async fn decode_image(target: Target) -> Option<Decoded> {
             vec![(target.path.clone(), target.epoch)],
         ));
     }
-    let rgba = match thumb_engine::generate_thumbnail_from_reader(
+    let result = thumb_engine::generate_thumbnail_from_reader(
         &target.path,
         &mut pin,
         target.spec.max_dimension,
         thumb_engine::FitMode::Fit,
-    ) {
+    );
+    #[cfg(target_os = "linux")]
+    if !linux_preview_source_is_current(&target.path, &pin, &source)
+        || crate::thumbnails::epoch_of(&target.path) != target.epoch
+    {
+        return None;
+    }
+    let rgba = match result {
         thumb_engine::ThumbnailResult::Generated(image) => image.to_rgba8(),
         _ => {
             return Some(Decoded::with_pins_and_epochs(
@@ -1473,6 +1511,7 @@ async fn decode_image(target: Target) -> Option<Decoded> {
             ));
         }
     };
+    #[cfg(target_os = "windows")]
     if !expected.matches_file(&pin)
         || pin
             .metadata()
@@ -1499,6 +1538,62 @@ async fn decode_image(target: Target) -> Option<Decoded> {
         vec![pin],
         vec![(target.path.clone(), target.epoch)],
     ))
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+async fn decode_image(_target: Target) -> Option<Decoded> {
+    Some(Decoded::without_lease(Content::Failed))
+}
+
+#[cfg(target_os = "linux")]
+fn open_linux_preview_file(
+    path: &Path,
+    expected: &FilesystemIdentity,
+) -> Result<(std::fs::File, SourceStamp), ()> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    // Linux UAPI の fcntl.h は一部のアーキテクチャで異なる値を定義している。
+    let no_follow = match std::env::consts::ARCH {
+        "aarch64" | "arm" | "m68k" | "powerpc" | "powerpc64" => 0o100000,
+        _ => 0o400000,
+    };
+    let nonblock = match std::env::consts::ARCH {
+        "mips" | "mips32r6" | "mips64" | "mips64r6" => 0o200,
+        "sparc" | "sparc64" => 0o40000,
+        _ => 0o4000,
+    };
+
+    let metadata = std::fs::symlink_metadata(path).map_err(|_| ())?;
+    // 列挙時の EntrySourceIdentity は更新時刻と長さだけなので、open 後は inode も照合する。
+    let observed = FilesystemIdentity::from_fallback_token(format!(
+        "{:?}:{}",
+        metadata.modified().ok(),
+        metadata.len()
+    ));
+    if !metadata.is_file() || observed != *expected {
+        return Err(());
+    }
+    let source = SourceStamp::from_metadata(&metadata);
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        // 列挙後に symlink や FIFO へ置き換わっても、リンク先を読んだり open で待ったりしない。
+        .custom_flags(no_follow | nonblock)
+        .open(path)
+        .map_err(|_| ())?;
+    if !linux_preview_source_is_current(path, &file, &source) {
+        return Err(());
+    }
+    Ok((file, source))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_preview_source_is_current(path: &Path, file: &std::fs::File, stamp: &SourceStamp) -> bool {
+    // Linux の open handle は rename を止めない。パスと handle の両方を decode の境界で照合する。
+    let matches = |metadata: std::fs::Metadata| {
+        metadata.is_file() && SourceStamp::from_metadata(&metadata) == *stamp
+    };
+    file.metadata().ok().is_some_and(matches)
+        && std::fs::symlink_metadata(path).ok().is_some_and(matches)
 }
 
 pub(crate) fn is_text_preview_target(path: &std::path::Path) -> bool {
@@ -1539,16 +1634,25 @@ fn read_text_preview(target: &Target) -> Result<TextPreview, ()> {
         .filter(|identity| identity.kind == crate::directory::EntryKind::File)
         .map(EntrySourceIdentity::filesystem_identity)
         .ok_or(())?;
-    let mut file = open_text_file(&target.path, &expected)?;
-    let before = file.metadata().map_err(|_| ())?;
-    let before_stamp = SourceStamp::from_metadata(&before);
+    #[cfg(not(target_os = "linux"))]
+    let (mut file, before_stamp) = {
+        let file = open_text_file(&target.path, &expected)?;
+        let before = file.metadata().map_err(|_| ())?;
+        (file, SourceStamp::from_metadata(&before))
+    };
+    #[cfg(target_os = "linux")]
+    let (mut file, before_stamp) = open_linux_preview_file(&target.path, &expected)?;
     let mut bytes = Vec::with_capacity(TEXT_READ_LIMIT + 1);
     file.by_ref()
         .take((TEXT_READ_LIMIT + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|_| ())?;
-    let after = file.metadata().map_err(|_| ())?;
-    if SourceStamp::from_metadata(&after) != before_stamp {
+    #[cfg(not(target_os = "linux"))]
+    if SourceStamp::from_metadata(&file.metadata().map_err(|_| ())?) != before_stamp {
+        return Err(());
+    }
+    #[cfg(target_os = "linux")]
+    if !linux_preview_source_is_current(&target.path, &file, &before_stamp) {
         return Err(());
     }
     let truncated = bytes.len() > TEXT_READ_LIMIT;
@@ -1597,7 +1701,7 @@ fn open_text_file(
     (actual == *expected).then_some(file).ok_or(())
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 fn open_text_file(
     _path: &std::path::Path,
     _expected: &FilesystemIdentity,
@@ -1681,6 +1785,33 @@ mod tests {
             epoch: MediaEpoch::default(),
             spec: DecodeSpec::default(),
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_preview_rejects_replacement_with_same_listing_token() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("preview.txt");
+        std::fs::write(&path, b"old").unwrap();
+        let expected = EntrySourceIdentity::from_path_no_follow(&path, EntryKind::File).unwrap();
+        let (file, before) =
+            open_linux_preview_file(&path, &expected.filesystem_identity()).unwrap();
+        assert!(linux_preview_source_is_current(&path, &file, &before));
+
+        let mut request = target(path.to_str().unwrap(), 1);
+        request.source_identity = Some(expected.clone());
+        assert_eq!(read_text_preview(&request).unwrap().text, "old");
+
+        let modified = file.metadata().unwrap().modified().unwrap();
+        let replacement = directory.path().join("replacement.txt");
+        std::fs::write(&replacement, b"new").unwrap();
+        std::fs::File::open(&replacement)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        assert!(expected.matches_path(&path));
+        assert!(!linux_preview_source_is_current(&path, &file, &before));
     }
 
     #[test]

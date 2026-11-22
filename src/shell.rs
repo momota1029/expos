@@ -18182,14 +18182,11 @@ impl FilerShell {
     }
 }
 
+#[cfg(all(test, windows))]
+mod e7_native_hwnd;
+
 #[cfg(test)]
 mod tests {
-    #[cfg(windows)]
-    #[path = "../e7_native_hwnd.rs"]
-    // Rustfmt は inline module 内の path を rustc と異なる基準で解決するため、この専用fixtureを除外する。
-    #[rustfmt::skip]
-    mod e7_native_hwnd;
-
     use super::*;
     use gpui::{IntoElement, Render, Window, div, point, px, size};
     use session_store::{
@@ -58111,6 +58108,7 @@ fn ordinary_trash_shell_writer_child_crash_before_terminal_upsert(cx: &mut gpui:
         drop(real_writer);
     }
 
+    #[cfg(windows)]
     fn run_cross_volume_source_deletion_terminal_write_test(
         cx: &mut gpui::TestAppContext,
         fixture: CrossVolumeMoveTerminalFailureFixture,
@@ -76025,6 +76023,7 @@ fn ordinary_trash_shell_writer_child_crash_before_terminal_upsert(cx: &mut gpui:
         drop(journal_writer);
     }
 
+    #[cfg(windows)]
     #[gpui::test]
     fn item_context_menu_mouse_route_completes_multi_root_zip_without_seven_zip(
         cx: &mut gpui::TestAppContext,
@@ -77145,6 +77144,7 @@ fn ordinary_trash_shell_writer_child_crash_before_terminal_upsert(cx: &mut gpui:
         run_recovery_copy_shell_admission(cx, Err("injected durable admission failure".into()));
     }
 
+    #[cfg(windows)]
     #[gpui::test]
     fn recovery_copy_real_journal_primary_lock_rejects_admission_without_starting_worker(
         cx: &mut gpui::TestAppContext,

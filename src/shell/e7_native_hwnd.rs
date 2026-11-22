@@ -12,7 +12,10 @@ use windows::core::PCWSTR;
 #[ignore = "requires an interactive Windows desktop and a fixed NTFS test volume"]
 fn e7_replace_move_completes_after_origin_native_window_close() {
     assert!(
-        matches!(std::env::var("GPUI_FILER_INTERACTIVE_HWND_TEST").as_deref(), Ok("1")),
+        matches!(
+            std::env::var("GPUI_FILER_INTERACTIVE_HWND_TEST").as_deref(),
+            Ok("1")
+        ),
         "this test opens native windows and requires an isolated test desktop; set GPUI_FILER_INTERACTIVE_HWND_TEST=1 only in that environment",
     );
     use operations::journal::{JournalStore, JournalWriter};

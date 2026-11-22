@@ -12,17 +12,21 @@ use std::{
     io::{self, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
-    process::Command,
     sync::{Arc, Mutex, OnceLock, atomic::AtomicBool},
     time::{Duration, Instant},
 };
+
+#[cfg(windows)]
+use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
 const BROKER_ARGUMENT: &str = "--gpui-filer-privileged-broker";
 const PROTOCOL_VERSION: u32 = 1;
 const MAX_FRAME_BYTES: usize = 64 * 1024;
+#[cfg(windows)]
 const CONNECT_RETRY: Duration = Duration::from_millis(50);
+#[cfg(windows)]
 const START_TIMEOUT: Duration = Duration::from_secs(45);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(30);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(90);
@@ -332,6 +336,7 @@ pub fn create_symbolic_link_direct(source: &Path, destination: &Path) -> io::Res
     create_symbolic_link_target(source, destination, metadata.is_dir())
 }
 
+#[cfg(windows)]
 fn broker_create_symbolic_link(
     source: &Path,
     destination: &Path,
@@ -341,34 +346,20 @@ fn broker_create_symbolic_link(
     let _parent_identity_lease = match (expected_parent_volume, expected_parent_file_index) {
         (None, None) => None,
         (Some(volume), Some(index)) => {
-            #[cfg(windows)]
-            {
-                let identity = crate::filesystem_identity::FilesystemIdentity::from_windows_parts(
-                    volume, index,
-                );
-                let parent = destination.parent().ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "symbolic-link destination has no parent",
-                    )
-                })?;
-                Some(
-                    crate::operations::rename::pin_destination_directory_identity(
-                        parent, &identity,
-                    )
+            let identity =
+                crate::filesystem_identity::FilesystemIdentity::from_windows_parts(volume, index);
+            let parent = destination.parent().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "symbolic-link destination has no parent",
+                )
+            })?;
+            Some(
+                crate::operations::rename::pin_destination_directory_identity(parent, &identity)
                     .map_err(|error| {
                         io::Error::other(format!("destination parent identity changed: {error:?}"))
                     })?,
-                )
-            }
-            #[cfg(not(windows))]
-            {
-                let _ = (volume, index);
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "guarded symbolic-link creation requires Windows",
-                ));
-            }
+            )
         }
         _ => {
             return Err(io::Error::new(
@@ -379,6 +370,19 @@ fn broker_create_symbolic_link(
     };
 
     create_symbolic_link_direct(source, destination)
+}
+
+#[cfg(not(windows))]
+fn broker_create_symbolic_link(
+    _source: &Path,
+    _destination: &Path,
+    _expected_parent_volume: Option<u32>,
+    _expected_parent_file_index: Option<u64>,
+) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "broker symbolic-link creation requires Windows",
+    ))
 }
 
 /// Create a symbolic link from its already-observed target.  Unlike the
@@ -825,6 +829,7 @@ pub fn run_broker_from_process_args() -> Result<bool, String> {
     Ok(true)
 }
 
+#[cfg(windows)]
 fn start_elevated_broker(cancelled: &impl Fn() -> bool) -> Result<Endpoint, String> {
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .map_err(|error| format!("reserve privileged broker endpoint: {error}"))?;
@@ -878,6 +883,12 @@ fn start_elevated_broker(cancelled: &impl Fn() -> bool) -> Result<Endpoint, Stri
     }
 }
 
+#[cfg(not(windows))]
+fn start_elevated_broker(_cancelled: &impl Fn() -> bool) -> Result<Endpoint, String> {
+    Err("privileged broker is only supported on Windows".into())
+}
+
+#[cfg(windows)]
 fn random_token() -> Result<String, String> {
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes).map_err(|error| format!("generate broker capability: {error}"))?;
@@ -888,14 +899,21 @@ fn valid_token(token: &str) -> bool {
     token.len() == 64 && token.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+#[cfg(windows)]
 fn escape_powershell_single_quoted(value: &str) -> String {
     value.replace('\'', "''")
 }
 
+#[cfg(windows)]
 fn run_broker(endpoint: Endpoint) -> Result<(), String> {
     let listener = TcpListener::bind(endpoint.address)
         .map_err(|error| format!("bind privileged broker: {error}"))?;
     run_broker_on_listener(listener, endpoint)
+}
+
+#[cfg(not(windows))]
+fn run_broker(_endpoint: Endpoint) -> Result<(), String> {
+    Err("privileged broker is only supported on Windows".into())
 }
 
 /// Tests keep their already-bound loopback listener so another parallel test
