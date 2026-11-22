@@ -211,8 +211,8 @@ From WSL2 with Windows interoperability, `cargo-xwin`, and LLVM 18 installed:
 
 ```bash
 scripts/dev-install.sh
-scripts/dev-install.sh --root 'C:\Users\momot\Desktop\expos-dev' --dry-run
-scripts/dev-install.sh --root '/mnt/c/Users/momot/Desktop/expos-dev' --no-build --keep 3 --shortcut
+scripts/dev-install.sh --root 'C:\Users\<you>\expos-dev' --dry-run
+scripts/dev-install.sh --root '/mnt/c/Users/<you>/expos-dev' --no-build --keep 3 --shortcut
 ```
 
 The default root is `%LOCALAPPDATA%\expos`. A custom root must be a dedicated
