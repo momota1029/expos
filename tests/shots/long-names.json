@@ -1,0 +1,18 @@
+{
+  "comment": "行とタイルで、長いベース名、長い拡張子、日本語・空白を含む名前の表示を撮影する。",
+  "steps": [
+    {"action": "size", "width": 1280, "height": 800},
+    {"action": "navigate", "path": "long-names"},
+    {"action": "wait_idle"},
+    {"action": "view", "mode": "rows"},
+    {"action": "theme", "theme": "light"},
+    {"action": "screenshot", "name": "long-names-rows-light"},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "long-names-rows-dark"},
+    {"action": "view", "mode": "tiles"},
+    {"action": "theme", "theme": "light"},
+    {"action": "screenshot", "name": "long-names-tiles-light"},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "long-names-tiles-dark"}
+  ]
+}

@@ -149,8 +149,24 @@ unsafe_entry=$(find "$fixture" ! -type d ! -type f -print -quit)
 mkdir -p -- "$run"/{cache,config,data,fixture,fonts,home,link,runtime,state,tmp} "$out"
 cp -a -- "$fixture/." "$run/fixture/"
 chmod -R u+rwX -- "$run/fixture"
+# Git needs a tracked file to carry an otherwise-empty directory.
+find "$run/fixture" -type f -name .shot-empty -empty -delete
 # Git checkouts and generated fixtures can have different timestamps on disk.
 TZ=UTC find "$run/fixture" -exec touch -h -m -d '2020-01-02 03:04:05' -- {} +
+if [[ -f ${fixture}.mtimes ]]; then
+    while IFS= read -r line || [[ -n $line ]]; do
+        [[ -z $line || $line == \#* ]] && continue
+        timestamp=${line%%$'\t'*}
+        relative=${line#*$'\t'}
+        [[ $line == *$'\t'* && $relative != /* &&
+            $timestamp =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2}$ ]] ||
+            fail_usage "Invalid fixture timestamp in ${fixture}.mtimes: $line"
+        target=$(realpath -e -- "$run/fixture/$relative") &&
+            [[ $target == "$run/fixture/"* ]] ||
+            fail_usage "Timestamp path must name an entry inside the fixture: $relative"
+        TZ=UTC touch -h -m -d "$timestamp" -- "$target"
+    done <"${fixture}.mtimes"
+fi
 
 # Point XDG places at the fixture copy so their paths use the fixture display mapping.
 places_root=$run/fixture

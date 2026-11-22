@@ -1,0 +1,31 @@
+{
+  "comment": "ファイル情報ペインとテキスト・画像のクイックプレビューを撮影する。",
+  "steps": [
+    {"action": "size", "width": 1280, "height": 800},
+    {"action": "view", "mode": "rows"},
+    {"action": "select", "name": "notes.txt"},
+    {"action": "click", "x": 22, "y": 22},
+    {"action": "key", "keys": "right right right down down down down down enter"},
+    {"action": "theme", "theme": "light"},
+    {"action": "screenshot", "name": "file-info-text-light"},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "file-info-text-dark"},
+    {"action": "click", "x": 22, "y": 22},
+    {"action": "key", "keys": "right right right down down down down down enter"},
+    {"action": "select", "name": "notes.txt"},
+    {"action": "key", "keys": "space"},
+    {"action": "wait", "ms": 750},
+    {"action": "theme", "theme": "light"},
+    {"action": "screenshot", "name": "quick-preview-text-light"},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "quick-preview-text-dark"},
+    {"action": "key", "keys": "escape"},
+    {"action": "select", "name": "swatch.png"},
+    {"action": "key", "keys": "space"},
+    {"action": "wait", "ms": 750},
+    {"action": "theme", "theme": "light"},
+    {"action": "screenshot", "name": "quick-preview-image-light"},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "quick-preview-image-dark"}
+  ]
+}

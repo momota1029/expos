@@ -1,0 +1,29 @@
+{
+  "comment": "縦タブレールの追加ボタンと固定ボタンを使い、フォルダーの右クリックメニューからペインを分割する。",
+  "steps": [
+    {"action": "size", "width": 1280, "height": 800},
+    {"action": "view", "mode": "rows"},
+    {"action": "wait_idle"},
+    {"action": "click", "x": 92, "y": 726},
+    {"action": "navigate", "path": "documents"},
+    {"action": "select", "name": "letter.txt"},
+    {"action": "theme", "theme": "light"},
+    {"action": "screenshot", "name": "tabs-vertical-light"},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "tabs-vertical-dark"},
+    {"action": "key", "keys": "ctrl-1"},
+    {"action": "select", "name": "projects"},
+    {"action": "click", "x": 154, "y": 74},
+    {"action": "theme", "theme": "light"},
+    {"action": "screenshot", "name": "tabs-vertical-pinned-light"},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "tabs-vertical-pinned-dark"},
+    {"action": "click", "x": 335, "y": 240, "button": "right"},
+    {"action": "key", "keys": "up up enter"},
+    {"action": "select", "name": "ideas.md"},
+    {"action": "theme", "theme": "light"},
+    {"action": "screenshot", "name": "tabs-and-panes-split-light"},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "tabs-and-panes-split-dark"}
+  ]
+}

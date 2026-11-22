@@ -1,0 +1,18 @@
+{
+  "comment": "表示メニューのテーマ選択と言語選択を撮影する。",
+  "steps": [
+    {"action": "size", "width": 1280, "height": 800},
+    {"action": "wait_idle"},
+    {"action": "click", "x": 22, "y": 22},
+    {"action": "key", "keys": "right right right down down down right"},
+    {"action": "theme", "theme": "light"},
+    {"action": "screenshot", "name": "settings-themes-light"},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "settings-themes-dark"},
+    {"action": "key", "keys": "left down right"},
+    {"action": "theme", "theme": "light"},
+    {"action": "screenshot", "name": "settings-language-light"},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "settings-language-dark"}
+  ]
+}

@@ -22,14 +22,80 @@ returns status `1`. Existing PNGs in the output directory are ignored by the
 comparison.
 
 Every entry in the fixture copy, including directories and the fixture root,
-gets modification time `2020-01-02 03:04:05 UTC`. The capture app uses `TZ=UTC`,
-so rows display `2020-01-02 03:04` regardless of the host timezone. Breadcrumbs
-and sidebar tab subtitles inside the fixture start at `fixture` and show any
-subdirectories beneath it. The File Info location uses the same display path.
-While the address field is being edited, it shows the real path for navigation.
-The capture runner clears hover and waits for visible
-thumbnails before saving a PNG. Keyboard focus styling stays active for keyboard
-scenarios. Capture windows start at a fixed origin with reduced motion enabled.
+gets modification time `2020-01-02 03:04:05 UTC` by default. An optional
+`fixtures/<name>.mtimes` sidecar overrides individual dates. Each record contains
+a UTC timestamp in `YYYY-MM-DD HH:MM:SS` format, one tab, and an existing path
+relative to the fixture. Paths can contain spaces and Japanese characters.
+Blank lines and lines starting with `#` are ignored. Empty `.shot-empty` markers
+keep empty folders in Git and are removed from the copy before dates are set.
+
+Breadcrumbs and sidebar tab subtitles inside the fixture start at `fixture`
+and show any subdirectories beneath it. The File Info location uses the same
+display path. The address editor shows the real path for navigation.
+
+The runner waits for the active directory and visible thumbnails before saving
+a PNG. It clears hover by default and preserves keyboard focus styling.
+Capture windows start at a fixed origin with reduced motion enabled.
 
 The places scenario opens the PC view. The runner maps the fixture's Documents
 and Pictures directories through a private XDG user-dirs file.
+
+## Visual review scenarios
+
+Run a single scenario with the fixture from the table.
+
+~~~bash
+bash scripts/shot.sh --repeat 2 tests/shots/fixtures/rich tests/shots/views-rich.json
+~~~
+
+Each screenshot stem in the table produces both `-light.png` and `-dark.png`.
+The viewport is 1280 × 800 except for `narrow` at 640 × 700 and
+`sort-and-columns` at 1920 × 1080.
+
+| Scenario | Fixture | Screenshot stems |
+| --- | --- | --- |
+| `menus.json` | `basic` | `menus-bar`, `menus-file`, `menus-edit`, `menus-view`, `menus-view-layout`, `menus-view-columns`, `menus-go` |
+| `context-menu.json` | `basic` | `context-menu-file`, `context-menu-compression`, `context-menu-folder`, `context-menu-background`, `context-menu-creation` |
+| `job-progress.json` | `basic` | `job-progress-rename-collision`, `job-progress-details` |
+| `views-rich.json` | `rich` | `views-rich-rows-top`, `views-rich-rows-scrolled`, `views-rich-tiles-top`, `views-rich-tiles-scrolled`, `views-rich-icons-top`, `views-rich-icons-scrolled` |
+| `long-names.json` | `rich` | `long-names-rows`, `long-names-tiles` |
+| `narrow.json` | `rich` | `narrow-rows`, `narrow-tiles` |
+| `hover.json` | `basic` | `hover-row`, `hover-layout-button`, `hover-group-button`, `hover-tab`, `hover-cleared` |
+| `selection.json` | `basic` | `selection-range`, `selection-all` |
+| `search.json` | `basic` | `search-everything-idle`, `search-everything-unavailable`, `search-in-folder` |
+| `settings-panels.json` | `basic` | `settings-themes`, `settings-language` |
+| `tabs-and-panes.json` | `basic` | `tabs-vertical`, `tabs-vertical-pinned`, `tabs-and-panes-split` |
+| `sort-and-columns.json` | `rich` | `sort-name-ascending`, `sort-name-descending`, `sort-kind`, `sort-size`, `sort-date`, `group-by-date`, `group-by-kind` |
+| `file-info-and-preview.json` | `basic` | `file-info-text`, `quick-preview-text`, `quick-preview-image` |
+| `editors-and-empty.json` | `rich` | `rename-editor-active`, `rename-invalid-name`, `empty-folder`, `new-folder-created`, `new-folder-rename-editor` |
+
+The rich fixture includes 41 root entries with separate long-name and empty
+folders. Text files range from 2 bytes to about 65 KB. The ZIP entries are
+plain-text filename samples, and the PNGs reuse the basic fixture's swatch.
+
+The Edit menu exposes keymap reload. View exposes the theme and language
+submenus and File Info. The hamburger has no standalone Settings, Keymaps, or
+About panels. Native Properties and the Everything provider require Windows.
+The Linux search scenario exercises the resulting unavailable UI.
+Grouping cycles among None, Modified Date, and Kind on click.
+`Ctrl+Shift+N` creates `New Folder` directly, and the editor capture opens its
+name with F2. The rename failure appears inline and in Job progress.
+
+## Pointer and readiness steps
+
+Steps use integer coordinates in logical pixels from the top-left of the
+viewport. `click` defaults to the left button.
+
+~~~json
+{"action": "click", "x": 335, "y": 282, "button": "right"}
+{"action": "hover", "x": 335, "y": 282}
+{"action": "wait_idle", "entry": "New Folder"}
+~~~
+
+`hover` moves the pointer without pressing a button. Put it immediately before
+the screenshot that should retain hover. The runner clears the pointer
+after that capture. `wait_idle` optionally waits for an exact, visible entry
+name in the active listing in addition to directory enumeration and pending
+rename reconciliation. The new-folder scenario uses this check before
+selecting the newly created entry. Search and Quick Preview use explicit
+settling waits for their background results.

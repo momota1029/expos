@@ -13,7 +13,8 @@ use std::{
 
 use gpui::{
     App, AppContext as _, AsyncApp, Bounds, Keystroke, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, PlatformInput, Window, WindowBounds, WindowHandle, point, px, size,
+    MouseUpEvent, Pixels, PlatformInput, Point, Window, WindowBounds, WindowHandle, point, px,
+    size,
 };
 use serde::Deserialize;
 
@@ -84,7 +85,9 @@ enum Step {
     Wait {
         ms: u64,
     },
-    WaitIdle,
+    WaitIdle {
+        entry: Option<String>,
+    },
     Navigate {
         #[serde(flatten)]
         destination: NavigateDestination,
@@ -94,6 +97,12 @@ enum Step {
         keys: Vec<Keystroke>,
     },
     Click {
+        x: u32,
+        y: u32,
+        #[serde(default)]
+        button: ClickButton,
+    },
+    Hover {
         x: u32,
         y: u32,
     },
@@ -106,6 +115,14 @@ enum Step {
     Screenshot {
         name: String,
     },
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ClickButton {
+    #[default]
+    Left,
+    Right,
 }
 
 #[derive(Deserialize)]
@@ -243,6 +260,7 @@ impl Plan {
             handle,
             fixture: self.fixture,
             output: self.output,
+            capture_hover: Cell::new(false),
         };
         runner.clear_hover(cx)?;
         runner.frames(cx, deadline()).await?;
@@ -260,6 +278,7 @@ struct Runner {
     handle: WindowHandle<FilerShell>,
     fixture: PathBuf,
     output: PathBuf,
+    capture_hover: Cell<bool>,
 }
 
 impl Runner {
@@ -301,7 +320,7 @@ impl Runner {
                 }
                 cx.background_executor().timer(duration).await;
             }
-            Step::WaitIdle => self.wait_idle(cx, until).await?,
+            Step::WaitIdle { entry } => self.wait_idle(cx, until, entry.as_deref()).await?,
             Step::Navigate {
                 destination: NavigateDestination::Fixture { path },
             } => {
@@ -327,13 +346,30 @@ impl Runner {
                     self.frames(cx, until).await?;
                 }
             }
-            Step::Click { x, y } => {
+            Step::Click { x, y, button } => {
+                let button = match button {
+                    ClickButton::Left => MouseButton::Left,
+                    ClickButton::Right => MouseButton::Right,
+                };
                 self.frames(cx, until).await?;
-                self.window(cx, |window, cx| click(window, cx, x, y))??;
+                self.window(cx, |window, cx| -> ShotResult<()> {
+                    let position = pointer_position(window, x, y, "click")?;
+                    click(window, cx, position, button);
+                    Ok(())
+                })??;
                 self.clear_hover(cx)?;
             }
+            Step::Hover { x, y } => {
+                self.frames(cx, until).await?;
+                self.window(cx, |window, cx| -> ShotResult<()> {
+                    let position = pointer_position(window, x, y, "hover")?;
+                    move_pointer(window, cx, position);
+                    Ok(())
+                })??;
+                self.capture_hover.set(true);
+            }
             Step::Select { name } => {
-                self.wait_idle(cx, until).await?;
+                self.wait_idle(cx, until, None).await?;
                 let found = self.with_active_view(cx, |view, window, cx| {
                     let Some(index) = view.entries.iter().position(|entry| entry.name == name)
                     else {
@@ -366,8 +402,11 @@ impl Runner {
                 self.frames(cx, until).await?;
             }
             Step::Screenshot { name } => {
-                self.clear_hover(cx)?;
-                self.wait_idle(cx, until).await?;
+                let capture_hover = self.capture_hover.take();
+                if !capture_hover {
+                    self.clear_hover(cx)?;
+                }
+                self.wait_idle(cx, until, None).await?;
                 wait_until(cx, until, "visible thumbnails", |cx| {
                     self.with_active_view(cx, |view, _, _| !view.shot_previews_pending)
                 })
@@ -381,6 +420,9 @@ impl Runner {
                     .background_executor()
                     .spawn(async move { target.save_png(output, remaining) })
                     .await?;
+                if capture_hover {
+                    self.clear_hover(cx)?;
+                }
                 println!("{}", saved.display());
             }
         }
@@ -396,18 +438,13 @@ impl Runner {
     }
 
     fn clear_hover(&self, cx: &mut AsyncApp) -> ShotResult<()> {
+        self.capture_hover.set(false);
         self.window(cx, |window, cx| {
             // キーボード操作後は GPUI が hover を抑止する。focus-visible を維持する。
             if window.last_input_was_keyboard() {
                 return;
             }
-            window.dispatch_event(
-                PlatformInput::MouseMove(MouseMoveEvent {
-                    position: point(px(-1.), px(-1.)),
-                    ..Default::default()
-                }),
-                cx,
-            );
+            move_pointer(window, cx, point(px(-1.), px(-1.)));
         })
     }
 
@@ -429,8 +466,17 @@ impl Runner {
         })
     }
 
-    async fn wait_idle(&self, cx: &mut AsyncApp, until: Instant) -> ShotResult<()> {
-        wait_until(cx, until, "directory enumeration", |cx| {
+    async fn wait_idle(
+        &self,
+        cx: &mut AsyncApp,
+        until: Instant,
+        entry: Option<&str>,
+    ) -> ShotResult<()> {
+        let reason = entry.map_or_else(
+            || "directory enumeration".to_owned(),
+            |name| format!("directory entry {name:?}"),
+        );
+        wait_until(cx, until, &reason, |cx| {
             self.with_active_view(cx, |view, _, _| {
                 let status = view.session.status();
                 if let Some(error) = status.error() {
@@ -440,7 +486,8 @@ impl Runner {
                 Ok(!status.is_loading()
                     && (!view.is_this_pc() || view.pc_base_sources_complete)
                     && view.pending_rename_geometry.is_none()
-                    && view.pending_rename_tab.is_none())
+                    && view.pending_rename_tab.is_none()
+                    && entry.is_none_or(|name| view.entries.iter().any(|entry| entry.name == name)))
             })?
         })
         .await?;
@@ -462,12 +509,16 @@ impl Runner {
     }
 }
 
-fn click(window: &mut Window, cx: &mut App, x: u32, y: u32) -> ShotResult<()> {
+fn pointer_position(window: &Window, x: u32, y: u32, action: &str) -> ShotResult<Point<Pixels>> {
     let position = point(px(x as f32), px(y as f32));
     let viewport = window.viewport_size();
     if position.x >= viewport.width || position.y >= viewport.height {
-        return Err(format!("click ({x}, {y}) is outside the viewport").into());
+        return Err(format!("{action} ({x}, {y}) is outside the viewport").into());
     }
+    Ok(position)
+}
+
+fn move_pointer(window: &mut Window, cx: &mut App, position: Point<Pixels>) {
     window.dispatch_event(
         PlatformInput::MouseMove(MouseMoveEvent {
             position,
@@ -475,9 +526,13 @@ fn click(window: &mut Window, cx: &mut App, x: u32, y: u32) -> ShotResult<()> {
         }),
         cx,
     );
+}
+
+fn click(window: &mut Window, cx: &mut App, position: Point<Pixels>, button: MouseButton) {
+    move_pointer(window, cx, position);
     window.dispatch_event(
         PlatformInput::MouseDown(MouseDownEvent {
-            button: MouseButton::Left,
+            button,
             position,
             click_count: 1,
             ..Default::default()
@@ -486,14 +541,13 @@ fn click(window: &mut Window, cx: &mut App, x: u32, y: u32) -> ShotResult<()> {
     );
     window.dispatch_event(
         PlatformInput::MouseUp(MouseUpEvent {
-            button: MouseButton::Left,
+            button,
             position,
             click_count: 1,
             ..Default::default()
         }),
         cx,
     );
-    Ok(())
 }
 
 fn valid_name(name: &str) -> bool {

@@ -1,0 +1,18 @@
+{
+  "comment": "Shift による範囲選択と Ctrl+A による全選択で、行と件数表示を撮影する。",
+  "steps": [
+    {"action": "size", "width": 1280, "height": 800},
+    {"action": "view", "mode": "rows"},
+    {"action": "select", "name": "notes.txt"},
+    {"action": "key", "keys": "shift-down shift-down"},
+    {"action": "theme", "theme": "light"},
+    {"action": "screenshot", "name": "selection-range-light"},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "selection-range-dark"},
+    {"action": "key", "keys": "ctrl-a"},
+    {"action": "theme", "theme": "light"},
+    {"action": "screenshot", "name": "selection-all-light"},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "selection-all-dark"}
+  ]
+}

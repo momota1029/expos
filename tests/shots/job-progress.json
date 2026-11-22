@@ -1,0 +1,21 @@
+{
+  "comment": "同名フォルダーへの変更を拒否したジョブを、進捗ペインと Details で撮影する。",
+  "steps": [
+    {"action": "size", "width": 1280, "height": 800},
+    {"action": "view", "mode": "rows"},
+    {"action": "select", "name": "documents"},
+    {"action": "key", "keys": "f2 p r o j e c t s tab"},
+    {"action": "wait_idle"},
+    {"action": "theme", "theme": "light"},
+    {"action": "screenshot", "name": "job-progress-rename-collision-light"},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "job-progress-rename-collision-dark"},
+    {"action": "click", "x": 1147, "y": 107},
+    {"action": "theme", "theme": "light"},
+    {"action": "screenshot", "name": "job-progress-details-light"},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "job-progress-details-dark"},
+    {"action": "select", "name": "documents"},
+    {"action": "select", "name": "projects"}
+  ]
+}

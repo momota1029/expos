@@ -1,0 +1,26 @@
+{
+  "comment": "タイトルバー検索の初期状態と Linux での検索結果、およびフォルダー内検索を撮影する。",
+  "steps": [
+    {"action": "size", "width": 1280, "height": 800},
+    {"action": "view", "mode": "rows"},
+    {"action": "wait_idle"},
+    {"action": "click", "x": 1126, "y": 22},
+    {"action": "theme", "theme": "light"},
+    {"action": "screenshot", "name": "search-everything-idle-light"},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "search-everything-idle-dark"},
+    {"action": "key", "keys": "n o t e"},
+    {"action": "wait", "ms": 750},
+    {"action": "theme", "theme": "light"},
+    {"action": "screenshot", "name": "search-everything-unavailable-light"},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "search-everything-unavailable-dark"},
+    {"action": "key", "keys": "escape"},
+    {"action": "select", "name": "documents"},
+    {"action": "key", "keys": "/ n o t e"},
+    {"action": "theme", "theme": "light"},
+    {"action": "screenshot", "name": "search-in-folder-light"},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "search-in-folder-dark"}
+  ]
+}

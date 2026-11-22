@@ -1,0 +1,17 @@
+{
+  "comment": "640 × 700 のウィンドウで、タブレール、一覧ツールバー、行とタイルの表示を撮影する。",
+  "steps": [
+    {"action": "size", "width": 640, "height": 700},
+    {"action": "wait_idle"},
+    {"action": "view", "mode": "rows"},
+    {"action": "theme", "theme": "light"},
+    {"action": "screenshot", "name": "narrow-rows-light"},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "narrow-rows-dark"},
+    {"action": "view", "mode": "tiles"},
+    {"action": "theme", "theme": "light"},
+    {"action": "screenshot", "name": "narrow-tiles-light"},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "narrow-tiles-dark"}
+  ]
+}
