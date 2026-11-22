@@ -56,7 +56,7 @@ The viewport is 1280 × 800 except for `narrow` at 640 × 700 and
 | --- | --- | --- |
 | `menus.json` | `basic` | `menus-bar`, `menus-file`, `menus-edit`, `menus-view`, `menus-view-layout`, `menus-view-columns`, `menus-go` |
 | `context-menu.json` | `basic` | `context-menu-file`, `context-menu-compression`, `context-menu-folder`, `context-menu-background`, `context-menu-creation` |
-| `job-progress.json` | `basic` | `job-progress-rename-collision`, `job-progress-details` |
+| `job-progress.json` | `basic` | `job-progress-rename-collision`, `job-progress-details`, `job-progress-details-populated` |
 | `views-rich.json` | `rich` | `views-rich-rows-top`, `views-rich-rows-scrolled`, `views-rich-tiles-top`, `views-rich-tiles-scrolled`, `views-rich-icons-top`, `views-rich-icons-scrolled` |
 | `long-names.json` | `rich` | `long-names-rows`, `long-names-tiles` |
 | `narrow.json` | `rich` | `narrow-rows`, `narrow-tiles` |
@@ -67,7 +67,7 @@ The viewport is 1280 × 800 except for `narrow` at 640 × 700 and
 | `tabs-and-panes.json` | `basic` | `tabs-vertical`, `tabs-vertical-pinned`, `tabs-and-panes-split` |
 | `sort-and-columns.json` | `rich` | `sort-name-ascending`, `sort-name-descending`, `sort-kind`, `sort-size`, `sort-date`, `group-by-date`, `group-by-kind` |
 | `file-info-and-preview.json` | `basic` | `file-info-text`, `quick-preview-text`, `quick-preview-image` |
-| `editors-and-empty.json` | `rich` | `rename-editor-active`, `rename-invalid-name`, `empty-folder`, `new-folder-created`, `new-folder-rename-editor` |
+| `editors-and-empty.json` | `editors-and-empty` | `rename-editor-active`, `rename-invalid-name`, `empty-folder`, `folder-rename-editor` |
 
 The rich fixture includes 41 root entries with separate long-name and empty
 folders. Text files range from 2 bytes to about 65 KB. The ZIP entries are
@@ -78,8 +78,19 @@ submenus and File Info. The hamburger has no standalone Settings, Keymaps, or
 About panels. Native Properties and the Everything provider require Windows.
 The Linux search scenario exercises the resulting unavailable UI.
 Grouping cycles among None, Modified Date, and Kind on click.
-`Ctrl+Shift+N` creates `New Folder` directly, and the editor capture opens its
-name with F2. The rename failure appears inline and in Job progress.
+
+The Linux executor does not support Create Folder, so the scenario omits
+captures of the folder creation flow. It opens the rename editor with F2 on
+`folders/New Folder`, which is already present in the fixture.
+
+Job progress captures a failed rename inline and in the compact panel. The
+Details action opens the File operations sheet for one collision, then a
+reverse collision adds a second row to the same sheet.
+
+Tabs and panes checks that the pinned tab survives `Ctrl+W`. The scenario uses
+`down down enter` after right-clicking `projects` in the basic fixture to choose
+**Open in New Pane**. The final screenshots show the folder opened as a new
+vertical tab, with `ideas.md` selected.
 
 ## Pointer and readiness steps
 
@@ -89,13 +100,12 @@ viewport. `click` defaults to the left button.
 ~~~json
 {"action": "click", "x": 335, "y": 282, "button": "right"}
 {"action": "hover", "x": 335, "y": 282}
-{"action": "wait_idle", "entry": "New Folder"}
+{"action": "wait_idle", "entry": "ideas.md"}
 ~~~
 
 `hover` moves the pointer without pressing a button. Put it immediately before
 the screenshot that should retain hover. The runner clears the pointer
 after that capture. `wait_idle` optionally waits for an exact, visible entry
 name in the active listing in addition to directory enumeration and pending
-rename reconciliation. The new-folder scenario uses this check before
-selecting the newly created entry. Search and Quick Preview use explicit
-settling waits for their background results.
+rename reconciliation. Search and Quick Preview use explicit settling waits
+for their background results.

@@ -125,6 +125,9 @@ fn locale_from_windows_language_id(language: u16) -> Locale {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Message {
     NewTab,
+    ClosedTabs,
+    ReopenClosedTab,
+    ReopenClosedWorkspace,
     NoClosedWorkspaces,
     ClosedWorkspaces,
     DuplicateWorkspace,
@@ -600,6 +603,9 @@ impl Translator {
     pub(crate) fn text(&self, message: Message) -> Cow<'static, str> {
         let japanese = match message {
             Message::NewTab => "新しいタブ",
+            Message::ClosedTabs => "閉じたタブ",
+            Message::ReopenClosedTab => "閉じたタブを開き直す",
+            Message::ReopenClosedWorkspace => "閉じたワークスペースを開き直す",
             Message::NoClosedWorkspaces => "閉じたワークスペースはありません",
             Message::ClosedWorkspaces => "閉じたワークスペース",
             Message::DuplicateWorkspace => "複製",
@@ -1321,6 +1327,9 @@ impl Translator {
 fn english(message: Message) -> Option<&'static str> {
     Some(match message {
         Message::NewTab => "New tab",
+        Message::ClosedTabs => "Closed tabs",
+        Message::ReopenClosedTab => "Reopen closed tab",
+        Message::ReopenClosedWorkspace => "Reopen closed workspace",
         Message::NoClosedWorkspaces => "No closed workspaces",
         Message::ClosedWorkspaces => "Closed workspaces",
         Message::DuplicateWorkspace => "Duplicate",

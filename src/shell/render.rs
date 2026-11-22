@@ -1056,6 +1056,9 @@ impl Render for FilerShell {
                                     .children(trailing_tab_groups),
                             )
                             .child(ReopenTabsButton::new(
+                                self.translator.text(Message::ClosedTabs).into_owned(),
+                                self.translator.text(Message::ReopenClosedTab).into_owned(),
+                                !self.closed_tabs.is_empty(),
                                 cx.listener(|this, intent, _window, cx| {
                                     if let TabIntent::ReopenMenu { at } = intent {
                                         this.open_reopen_menu(*at, cx);

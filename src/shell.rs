@@ -18222,6 +18222,9 @@ impl FilerShell {
                 })
                 .collect(),
             self.translator.text(Message::ClosedWorkspaces).into_owned(),
+            self.translator
+                .text(Message::ReopenClosedWorkspace)
+                .into_owned(),
             menu_bar,
             menu_mode,
             window.is_maximized(),

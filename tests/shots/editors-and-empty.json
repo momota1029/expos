@@ -1,5 +1,5 @@
 {
-  "comment": "インライン名前変更、入力エラー、空フォルダーと新規フォルダーの名前変更を撮影する。",
+  "comment": "インライン名前変更、入力エラー、空フォルダー、fixture に用意したフォルダーの名前変更を撮影する。",
   "steps": [
     {"action": "size", "width": 1280, "height": 800},
     {"action": "view", "mode": "rows"},
@@ -21,18 +21,13 @@
     {"action": "screenshot", "name": "empty-folder-light"},
     {"action": "theme", "theme": "dark"},
     {"action": "screenshot", "name": "empty-folder-dark"},
+    {"action": "navigate", "path": "folders"},
     {"action": "view", "mode": "icons"},
-    {"action": "key", "keys": "ctrl-shift-n"},
-    {"action": "wait_idle", "entry": "New Folder"},
     {"action": "select", "name": "New Folder"},
-    {"action": "theme", "theme": "light"},
-    {"action": "screenshot", "name": "new-folder-created-light"},
-    {"action": "theme", "theme": "dark"},
-    {"action": "screenshot", "name": "new-folder-created-dark"},
     {"action": "key", "keys": "f2"},
     {"action": "theme", "theme": "light"},
-    {"action": "screenshot", "name": "new-folder-rename-editor-light"},
+    {"action": "screenshot", "name": "folder-rename-editor-light"},
     {"action": "theme", "theme": "dark"},
-    {"action": "screenshot", "name": "new-folder-rename-editor-dark"}
+    {"action": "screenshot", "name": "folder-rename-editor-dark"}
   ]
 }

@@ -17,7 +17,7 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 use gpui_filer_resources::IconId;
-use gpui_filer_ui::Icon;
+use gpui_filer_ui::{Icon, TextTooltip};
 use std::rc::Rc;
 
 use crate::bounds_capture::BoundsCapture;
@@ -128,6 +128,7 @@ pub(super) fn bar(
     restore_menu_open: bool,
     restore_items: Vec<WorkspaceRestoreItem>,
     restore_workspaces_label: String,
+    restore_tooltip: String,
     menu: Option<gpui::AnyElement>,
     menu_mode: bool,
     maximized: bool,
@@ -146,6 +147,7 @@ pub(super) fn bar(
         restore_menu_open,
         restore_items,
         restore_workspaces_label,
+        restore_tooltip,
         on_workspace.clone(),
         palette,
     );
@@ -500,10 +502,13 @@ fn workspace_restore(
     restore_menu_open: bool,
     restore_items: Vec<WorkspaceRestoreItem>,
     restore_workspaces_label: String,
+    restore_tooltip: String,
     on_workspace: Rc<dyn Fn(WorkspaceIntent, &mut Window, &mut App) + 'static>,
     palette: gpui_filer_ui::ThemePalette,
 ) -> Div {
     let on_restore = on_workspace.clone();
+    let enabled = restore_menu_open || !restore_items.is_empty();
+    let restore_tooltip = gpui::SharedString::from(restore_tooltip);
     div()
         .relative()
         .flex_shrink_0()
@@ -516,21 +521,26 @@ fn workspace_restore(
                 .flex()
                 .items_center()
                 .justify_center()
-                .hover(|button| button.bg(palette.chrome_hover))
-                .cursor(gpui::CursorStyle::PointingHand)
+                .tooltip(move |_, cx| cx.new(|_| TextTooltip(restore_tooltip.clone())).into())
                 .child(
-                    Icon::new(IconId::Delete)
+                    Icon::new(IconId::WorkspaceHistory)
                         .size(px(16.0))
                         .color(palette.text.into()),
                 )
                 .on_mouse_down(gpui::MouseButton::Left, |_event, _window, cx| {
                     cx.stop_propagation();
                 })
-                .on_click(move |event, window, cx| {
-                    if event.standard_click() {
-                        on_restore(WorkspaceIntent::OpenRestoreMenu, window, cx);
-                        cx.stop_propagation();
-                    }
+                .when(!enabled, |button| button.opacity(0.55))
+                .when(enabled, |button| {
+                    button
+                        .hover(|style| style.bg(palette.chrome_hover))
+                        .cursor(gpui::CursorStyle::PointingHand)
+                        .on_click(move |event, window, cx| {
+                            if event.standard_click() {
+                                on_restore(WorkspaceIntent::OpenRestoreMenu, window, cx);
+                                cx.stop_propagation();
+                            }
+                        })
                 }),
         )
         .when(restore_menu_open, |menu| {

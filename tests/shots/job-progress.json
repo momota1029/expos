@@ -1,5 +1,5 @@
 {
-  "comment": "同名フォルダーへの変更を拒否したジョブを、進捗ペインと Details で撮影する。",
+  "comment": "同名フォルダーへの名前変更を拒否したジョブを進捗ペインとファイル操作シートで撮影し、逆向きの名前変更でもう1件追加する。",
   "steps": [
     {"action": "size", "width": 1280, "height": 800},
     {"action": "view", "mode": "rows"},
@@ -10,11 +10,20 @@
     {"action": "screenshot", "name": "job-progress-rename-collision-light"},
     {"action": "theme", "theme": "dark"},
     {"action": "screenshot", "name": "job-progress-rename-collision-dark"},
-    {"action": "click", "x": 1147, "y": 107},
+    {"action": "key", "keys": "escape"},
+    {"action": "click", "x": 1177, "y": 106},
     {"action": "theme", "theme": "light"},
     {"action": "screenshot", "name": "job-progress-details-light"},
     {"action": "theme", "theme": "dark"},
     {"action": "screenshot", "name": "job-progress-details-dark"},
+    {"action": "select", "name": "projects"},
+    {"action": "key", "keys": "f2 d o c u m e n t s tab"},
+    {"action": "wait_idle"},
+    {"action": "key", "keys": "escape"},
+    {"action": "theme", "theme": "light"},
+    {"action": "screenshot", "name": "job-progress-details-populated-light"},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "job-progress-details-populated-dark"},
     {"action": "select", "name": "documents"},
     {"action": "select", "name": "projects"}
   ]

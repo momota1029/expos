@@ -1,5 +1,5 @@
 use gpui::{
-    App, Hsla, IntoElement, ParentElement as _, Pixels, RenderOnce, Styled as _, Window, div,
+    App, Context, Hsla, IntoElement, ParentElement as _, Pixels, Render, RenderOnce, SharedString, Styled as _, Window, div,
     prelude::FluentBuilder as _, px, svg,
 };
 use gpui_filer_resources::{IconId, IconSource};
@@ -20,6 +20,24 @@ pub use theme::{
     SELECTION_BG, SELECTION_FOCUS_BG, SELECTION_HOVER_BG, SURFACE_BAR, SURFACE_BASE,
     SURFACE_HEADER, SURFACE_RAISED, TEXT, TEXT_ICON, TEXT_MUTED, ThemePalette, theme_palette,
 };
+
+pub struct TextTooltip(pub SharedString);
+
+impl Render for TextTooltip {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = theme_palette(cx);
+        div()
+            .px(px(8.0))
+            .py(px(4.0))
+            .rounded(px(RADIUS_SM))
+            .border_1()
+            .border_color(palette.border)
+            .bg(palette.surface_raised)
+            .text_color(palette.text)
+            .text_size(px(12.0))
+            .child(self.0.clone())
+    }
+}
 
 type CheckboxListener = Box<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App)>;
 

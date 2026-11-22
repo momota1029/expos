@@ -2516,12 +2516,23 @@ impl RenderOnce for VerticalTabs {
 
 #[derive(IntoElement)]
 pub struct ReopenTabsButton {
+    label: SharedString,
+    tooltip: SharedString,
+    enabled: bool,
     on_intent: TabListener,
 }
 
 impl ReopenTabsButton {
-    pub fn new(on_intent: impl Fn(&TabIntent, &mut Window, &mut App) + 'static) -> Self {
+    pub fn new(
+        label: impl Into<SharedString>,
+        tooltip: impl Into<SharedString>,
+        enabled: bool,
+        on_intent: impl Fn(&TabIntent, &mut Window, &mut App) + 'static,
+    ) -> Self {
         Self {
+            label: label.into(),
+            tooltip: tooltip.into(),
+            enabled,
             on_intent: Rc::new(on_intent),
         }
     }
@@ -2530,42 +2541,51 @@ impl ReopenTabsButton {
 impl RenderOnce for ReopenTabsButton {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let on_intent = self.on_intent;
+        let tooltip = self.tooltip;
         let palette = theme_palette(cx);
         div()
-            .h(px(VERTICAL_TABS_ACTION_HEIGHT))
             .w_full()
+            .px(px(8.0))
             .flex_shrink_0()
-            .flex()
-            .items_center()
-            .justify_center()
             .bg(palette.surface_raised)
             .child(
                 div()
                     .id("reopen-tab")
-                    // 見た目は小さいアイコンでも、タッチ対象は44px四方を保つ。
-                    .size(px(VERTICAL_TABS_ACTION_HEIGHT))
-                    .flex_shrink_0()
+                    .h(px(VERTICAL_TABS_ACTION_HEIGHT))
+                    .w_full()
                     .flex()
                     .items_center()
                     .justify_center()
+                    .gap(px(8.0))
                     .rounded(px(RADIUS_SM))
-                    .hover(|style| style.bg(palette.chrome_hover))
+                    .text_size(px(12.0))
+                    .text_color(palette.text_muted)
+                    .tooltip(move |_, cx| cx.new(|_| crate::TextTooltip(tooltip.clone())).into())
                     .child(
-                        Icon::new(IconId::Delete)
-                            .size(px(16.0))
-                            .color(palette.text.into()),
+                        div().flex_shrink_0().child(
+                            Icon::new(IconId::ReopenTab)
+                                .size(px(16.0))
+                                .color(palette.text_muted.into()),
+                        ),
                     )
-                    .on_click(move |event, window, cx| {
-                        cx.stop_propagation();
-                        if event.standard_click() {
-                            on_intent(
-                                &TabIntent::ReopenMenu {
-                                    at: event.position(),
-                                },
-                                window,
-                                cx,
-                            );
-                        }
+                    .child(div().min_w_0().truncate().child(self.label))
+                    .when(!self.enabled, |button| button.opacity(0.55))
+                    .when(self.enabled, |button| {
+                        button
+                            .hover(|style| style.bg(palette.chrome_hover))
+                            .cursor(gpui::CursorStyle::PointingHand)
+                            .on_click(move |event, window, cx| {
+                                cx.stop_propagation();
+                                if event.standard_click() {
+                                    on_intent(
+                                        &TabIntent::ReopenMenu {
+                                            at: event.position(),
+                                        },
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            })
                     }),
             )
     }

@@ -35,6 +35,7 @@ pub enum IconId {
     FolderTree,
     Expand,
     ReopenTab,
+    WorkspaceHistory,
     CloseOthers,
     Sort,
     Calendar,
@@ -122,6 +123,7 @@ impl IconId {
         Self::FolderTree,
         Self::Expand,
         Self::ReopenTab,
+        Self::WorkspaceHistory,
         Self::CloseOthers,
         Self::Sort,
         Self::Calendar,
@@ -277,6 +279,10 @@ impl IconId {
             ReopenTab => (
                 "reopen-tab",
                 IconSource::Svg("icons/fluent-system/tab_desktop_arrow_clockwise_16_regular.svg"),
+            ),
+            WorkspaceHistory => (
+                "workspace-history",
+                IconSource::Svg("icons/fluent-system/history_16_regular.svg"),
             ),
             CloseOthers => (
                 "close-others",
@@ -601,6 +607,9 @@ impl AssetSource for ResourceAssets {
             )),
             "icons/fluent-system/split_vertical_16_regular.svg" => Some(include_bytes!(
                 "../assets/icons/fluent-system/split_vertical_16_regular.svg"
+            )),
+            "icons/fluent-system/history_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/history_16_regular.svg"
             )),
             "icons/fluent-system/tab_desktop_arrow_clockwise_16_regular.svg" => {
                 Some(include_bytes!(
