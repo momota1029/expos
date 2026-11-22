@@ -1131,10 +1131,11 @@ fn tab_projection_face(
     active: bool,
     can_close: bool,
 ) -> impl IntoElement {
-    let foreground = if active {
-        theme_palette(cx).on_accent
+    let palette = theme_palette(cx);
+    let (foreground, secondary) = if active {
+        (palette.on_accent, palette.on_accent)
     } else {
-        theme_palette(cx).text
+        (palette.text, palette.text_muted)
     };
     let inset = tab_face_target_inset(active);
     let mut face = div()
@@ -1155,9 +1156,9 @@ fn tab_projection_face(
                 .right(px(0.0))
                 .rounded(px(RADIUS_SM))
                 .bg(if active {
-                    theme_palette(cx).accent
+                    palette.tab_accent
                 } else {
-                    theme_palette(cx).surface_raised
+                    palette.surface_raised
                 }),
         )
         .child(tab_label_body(
@@ -1168,7 +1169,7 @@ fn tab_projection_face(
                 locked,
                 disambiguation,
             },
-            theme_palette(cx),
+            secondary,
         ))
         .child(
             div()
@@ -1201,7 +1202,7 @@ fn tab_projection_face(
     face
 }
 
-fn tab_label_body(label: &TabLabel, palette: crate::ThemePalette) -> gpui::Div {
+fn tab_label_body(label: &TabLabel, secondary: gpui::Rgba) -> gpui::Div {
     let main = if label.locked {
         let mut row = div()
             .flex()
@@ -1223,7 +1224,7 @@ fn tab_label_body(label: &TabLabel, palette: crate::ThemePalette) -> gpui::Div {
                     .ml(px(6.0))
                     .flex_shrink_0()
                     .text_size(px(10.0))
-                    .text_color(palette.text_muted)
+                    .text_color(secondary)
                     .overflow_hidden()
                     .text_ellipsis()
                     .child(hint.clone()),
@@ -1244,7 +1245,7 @@ fn tab_label_body(label: &TabLabel, palette: crate::ThemePalette) -> gpui::Div {
             .child(
                 div()
                     .text_size(px(10.0))
-                    .text_color(palette.text_muted)
+                    .text_color(secondary)
                     .overflow_hidden()
                     .text_ellipsis()
                     .child(label.location.clone()),
@@ -1256,18 +1257,18 @@ fn tab_label_body(label: &TabLabel, palette: crate::ThemePalette) -> gpui::Div {
 fn animated_tab_label_body(
     label: &TabLabel,
     transition: Option<TabLabelTransition>,
-    palette: crate::ThemePalette,
+    secondary: gpui::Rgba,
 ) -> impl IntoElement {
     let Some(transition) = transition else {
         return div()
             .flex_1()
             .min_w_0()
-            .child(tab_label_body(label, palette))
+            .child(tab_label_body(label, secondary))
             .into_any_element();
     };
     let generation = transition.generation;
     let id = label.id;
-    let incoming = tab_label_body(label, palette).with_animation(
+    let incoming = tab_label_body(label, secondary).with_animation(
         format!("tab-label-in-{id}-{generation}"),
         Animation::new(TAB_PREVIEW_DURATION),
         |element, t| {
@@ -1279,7 +1280,7 @@ fn animated_tab_label_body(
     for (layer_index, layer) in transition.from.into_iter().enumerate() {
         let start_opacity = layer.opacity;
         let start_x = layer.offset_x;
-        let outgoing = tab_label_body(&layer.label, palette)
+        let outgoing = tab_label_body(&layer.label, secondary)
             .absolute()
             .left(px(start_x))
             .top(px(0.0))
@@ -1518,10 +1519,11 @@ struct TabReorderGhost {
 
 impl Render for TabReorderGhost {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let foreground = if self.active {
-            theme_palette(cx).on_accent
+        let palette = theme_palette(cx);
+        let (foreground, secondary) = if self.active {
+            (palette.on_accent, palette.on_accent)
         } else {
-            theme_palette(cx).text
+            (palette.text, palette.text_muted)
         };
         let inset = tab_face_target_inset(self.active);
         let mut tab = div()
@@ -1542,9 +1544,9 @@ impl Render for TabReorderGhost {
                     .right(px(0.0))
                     .rounded(px(RADIUS_SM))
                     .bg(if self.active {
-                        theme_palette(cx).accent
+                        palette.tab_accent
                     } else {
-                        theme_palette(cx).surface_raised
+                        palette.surface_raised
                     }),
             )
             .child(tab_label_body(
@@ -1555,7 +1557,7 @@ impl Render for TabReorderGhost {
                     locked: self.locked,
                     disambiguation: self.disambiguation.clone(),
                 },
-                theme_palette(cx),
+                secondary,
             ))
             .child(
                 div()
@@ -1585,11 +1587,12 @@ impl Render for TabReorderGhost {
                     .child(
                         Icon::new(IconId::Close)
                             .size(px(12.0))
-                            .color(theme_palette(cx).on_accent.into()),
+                            .color(foreground.into()),
                     ),
             );
         }
-        tab.opacity(0.9)
+        // ドラッグ先の下地が透けると、選択色と白いラベルのコントラストが落ちる。
+        tab.opacity(if self.active { 1.0 } else { 0.9 })
     }
 }
 
@@ -1889,6 +1892,7 @@ impl RenderOnce for VerticalTabs {
             focused_pane,
             owner_pane_key,
         } = self;
+        let palette = theme_palette(cx);
         let can_close = tabs.len() > 1;
         let tab_count = tabs.len();
         reorder_interaction.reconcile_label_transitions(&tabs);
@@ -1947,6 +1951,11 @@ impl RenderOnce for VerticalTabs {
                 reorder_interaction.gap_height_animation(index);
             let face_is_active = shown_id == active;
             let active_face_is_focused = face_is_active && focused_pane != Some(false);
+            let (foreground, secondary) = if active_face_is_focused {
+                (palette.on_accent, palette.on_accent)
+            } else {
+                (palette.text, palette.text_muted)
+            };
             let face_target_inset = tab_face_target_inset(face_is_active);
             let face_transition = reorder_interaction.face_transition(shown_id);
             let face_from_inset =
@@ -1960,7 +1969,7 @@ impl RenderOnce for VerticalTabs {
                 .rounded(px(RADIUS_SM))
                 .bg(if face_is_active {
                     if active_face_is_focused {
-                        theme_palette(cx).accent
+                        palette.tab_accent
                     } else {
                         theme_palette(cx).surface_raised
                     }
@@ -2038,11 +2047,7 @@ impl RenderOnce for VerticalTabs {
                 .items_center()
                 .h(px(tab_row_height(locked)))
                 .pl(px(10.0))
-                .text_color(if active_face_is_focused {
-                    theme_palette(cx).on_accent
-                } else {
-                    theme_palette(cx).text
-                })
+                .text_color(foreground)
                 .child(face)
                 .when(
                     (!is_placeholder || is_settling_source)
@@ -2060,7 +2065,7 @@ impl RenderOnce for VerticalTabs {
                                 .child(animated_tab_label_body(
                                     shown_tab,
                                     reorder_interaction.label_transition(shown_id),
-                                    theme_palette(cx),
+                                    secondary,
                                 )),
                         )
                         // 未 lock 時は hover で現れ、lock 中は状態を読めるよう常に残す。
@@ -2077,7 +2082,13 @@ impl RenderOnce for VerticalTabs {
                                 .rounded(px(RADIUS_SM))
                                 .opacity(if shown_locked { 1.0 } else { 0.0 })
                                 .group_hover(hover_group.clone(), |style| style.opacity(1.0))
-                                .hover(|style| style.bg(theme_palette(cx).chrome_hover))
+                                .hover(|style| {
+                                    style.bg(if active_face_is_focused {
+                                        palette.tab_accent
+                                    } else {
+                                        palette.chrome_hover_strong
+                                    })
+                                })
                                 .child(
                                     Icon::new(if shown_locked {
                                         IconId::Unlock
@@ -2085,14 +2096,7 @@ impl RenderOnce for VerticalTabs {
                                         IconId::Lock
                                     })
                                     .size(px(13.0))
-                                    .color(
-                                        (if id == active {
-                                            theme_palette(cx).on_accent
-                                        } else {
-                                            theme_palette(cx).text
-                                        })
-                                        .into(),
-                                    ),
+                                    .color(foreground.into()),
                                 )
                                 .on_click(move |event, window, cx| {
                                     cx.stop_propagation();
@@ -2111,11 +2115,17 @@ impl RenderOnce for VerticalTabs {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .hover(|style| style.bg(theme_palette(cx).close_hover))
+                                    .hover(|style| {
+                                        style.bg(if active_face_is_focused {
+                                            palette.close_hover
+                                        } else {
+                                            palette.chrome_hover_strong
+                                        })
+                                    })
                                     .child(
                                         Icon::new(IconId::Close)
                                             .size(px(12.0))
-                                            .color(theme_palette(cx).on_accent.into()),
+                                            .color(foreground.into()),
                                     )
                                     .on_click(move |event, window, cx| {
                                         cx.stop_propagation();

@@ -1239,7 +1239,7 @@ impl FilerShell {
                         .size(px(16.0))
                         .color(gpui_filer_ui::theme_palette(cx).text.into()),
                 )
-                .child("Job progress")
+                .child(self.translator.text(Message::JobProgressTitle).into_owned())
                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                     cx.stop_propagation();
                     if event.standard_click() {
@@ -1667,25 +1667,86 @@ impl FilerShell {
         source_view: gpui::Entity<DirectoryListDemo>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        use crate::file_info_hash::State as HashState;
+
+        let palette = gpui_filer_ui::theme_palette(cx);
+        let divider = palette.text.opacity(0.14);
+        let title = || {
+            div()
+                .min_w_0()
+                .whitespace_normal()
+                .text_size(px(16.0))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+        };
+        let detail = |label: String, value: String, color| {
+            div()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .child(
+                    div()
+                        .text_color(palette.text_muted)
+                        .text_size(px(12.0))
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .whitespace_normal()
+                        .text_color(color)
+                        .child(value),
+                )
+        };
+        let row = |label, value| detail(label, value, palette.text);
+        let hash_status = |message| {
+            detail(
+                self.translator.text(Message::FileInfoHash).into_owned(),
+                self.translator.text(message).into_owned(),
+                palette.text_muted,
+            )
+        };
+        let copy_button = |id: &'static str| {
+            div()
+                .id(id)
+                .w_full()
+                .h(px(32.0))
+                .flex_shrink_0()
+                .px(px(10.0))
+                .flex()
+                .items_center()
+                .border_1()
+                .border_color(divider)
+                .rounded(px(6.0))
+                .cursor_pointer()
+                .hover(|style| style.bg(palette.chrome_hover))
+        };
         let mut body = div()
             .w(px(width))
             .h_full()
             .min_w_0()
             .flex()
             .flex_col()
-            .gap(px(10.0))
-            .p(px(12.0))
+            .gap(px(12.0))
+            .p(px(16.0))
             .border_l_1()
-            .border_color(gpui_filer_ui::theme_palette(cx).border)
-            .bg(gpui_filer_ui::theme_palette(cx).surface_base)
-            .text_color(gpui_filer_ui::theme_palette(cx).text);
+            .border_color(divider)
+            .bg(palette.surface_base)
+            .text_color(palette.text)
+            .text_size(px(14.0));
         let Some(projection) = self.file_info_projection.as_ref() else {
             return body
-                .child(self.translator.text(Message::FileInfoEmpty).into_owned())
+                .child(title().child(self.translator.text(Message::FileInfoEmpty).into_owned()))
                 .into_any_element();
         };
         if projection.selected_count > 1 {
-            body = body.child(self.translator.text(Message::FileInfoMultiple).into_owned());
+            body = body.child(
+                title()
+                    .pb(px(12.0))
+                    .border_b_1()
+                    .border_color(divider)
+                    .child(self.translator.text(Message::FileInfoMultiple).into_owned()),
+            );
             let aggregate = projection.aggregate.as_ref().map(|aggregate| {
                 (
                     aggregate.file_count,
@@ -1694,17 +1755,13 @@ impl FilerShell {
                     aggregate.unknown_size_count,
                 )
             });
-            for line in self
+            for (label, value) in self
                 .translator
                 .multiple_selection_rows(projection.selected_count, aggregate)
             {
-                body = body.child(line);
+                body = body.child(row(self.translator.text(label).into_owned(), value));
             }
-            body = body.child(div().child(format!(
-                "{}: {}",
-                self.translator.text(Message::FileInfoHash),
-                self.translator.text(Message::FileInfoHashUnavailable)
-            )));
+            body = body.child(hash_status(Message::FileInfoHashUnavailable));
             if let Some(token) = projection.copy_token.as_ref() {
                 let source_id = source_view.entity_id();
                 let name_click = cx.listener({
@@ -1755,35 +1812,17 @@ impl FilerShell {
                     div()
                         .flex()
                         .flex_col()
-                        .gap(px(6.0))
+                        .gap(px(12.0))
                         .child(
-                            div()
-                                .id("file-info-copy-names")
+                            copy_button("file-info-copy-names")
                                 .track_focus(&self.file_info_copy_names_focus)
-                                .focusable()
-                                .h(px(44.0))
-                                .px(px(10.0))
-                                .flex()
-                                .items_center()
-                                .border_1()
-                                .border_color(gpui_filer_ui::theme_palette(cx).border)
-                                .rounded(px(4.0))
                                 .child(self.translator.text(Message::FileInfoCopyNames).into_owned())
                                 .on_click(name_click)
                                 .on_key_down(key_name),
                         )
                         .child(
-                            div()
-                                .id("file-info-copy-paths")
+                            copy_button("file-info-copy-paths")
                                 .track_focus(&self.file_info_copy_paths_focus)
-                                .focusable()
-                                .h(px(44.0))
-                                .px(px(10.0))
-                                .flex()
-                                .items_center()
-                                .border_1()
-                                .border_color(gpui_filer_ui::theme_palette(cx).border)
-                                .rounded(px(4.0))
                                 .child(self.translator.text(Message::FileInfoCopyPaths).into_owned())
                                 .on_click(path_click)
                                 .on_key_down(key_path),
@@ -1794,27 +1833,9 @@ impl FilerShell {
         }
         let Some(item) = projection.item.as_ref() else {
             return body
-                .child(self.translator.text(Message::FileInfoEmpty).into_owned())
-                .child(format!(
-                    "{}: {}",
-                    self.translator.text(Message::FileInfoHash),
-                    self.translator.text(Message::FileInfoHashUnavailable)
-                ))
+                .child(title().child(self.translator.text(Message::FileInfoEmpty).into_owned()))
+                .child(hash_status(Message::FileInfoHashUnavailable))
                 .into_any_element();
-        };
-        let row = |label: String, value: String| {
-            div()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .child(
-                    div()
-                        .text_color(gpui_filer_ui::theme_palette(cx).text_muted)
-                        .text_size(px(12.0))
-                        .child(label),
-                )
-                .child(div().min_w_0().whitespace_normal().child(value))
         };
         let location = item
             .path
@@ -1830,11 +1851,20 @@ impl FilerShell {
         body = body
             .child(
                 div()
-                    .min_w_0()
-                    .whitespace_normal()
-                    .text_size(px(16.0))
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .child(item.name.clone()),
+                    .flex()
+                    .items_start()
+                    .gap(px(8.0))
+                    .pb(px(12.0))
+                    .border_b_1()
+                    .border_color(divider)
+                    .child(
+                        div().flex_shrink_0().child(
+                            Icon::new(item.icon)
+                                .size(px(20.0))
+                                .color(palette.text_icon.into()),
+                        ),
+                    )
+                    .child(title().child(item.name.clone())),
             )
             .child(row(
                 self.translator.text(Message::FileInfoKind).into_owned(),
@@ -1860,24 +1890,16 @@ impl FilerShell {
                 target.display().to_string(),
             ));
         }
-        body = body.child(row(
-            self.translator.text(Message::FileInfoHash).into_owned(),
-            match self.file_info_hash.state() {
-                crate::file_info_hash::State::Unavailable => self
-                    .translator
-                    .text(Message::FileInfoHashUnavailable)
-                    .into_owned(),
-                crate::file_info_hash::State::Loading => self
-                    .translator
-                    .text(Message::FileInfoHashLoading)
-                    .into_owned(),
-                crate::file_info_hash::State::Ready(digest) => digest.clone(),
-                crate::file_info_hash::State::Failed => self
-                    .translator
-                    .text(Message::FileInfoHashFailed)
-                    .into_owned(),
-            },
-        ));
+        let hash = match self.file_info_hash.state() {
+            HashState::Unavailable => hash_status(Message::FileInfoHashUnavailable),
+            HashState::Loading => hash_status(Message::FileInfoHashLoading),
+            HashState::Failed => hash_status(Message::FileInfoHashFailed),
+            HashState::Ready(digest) => row(
+                self.translator.text(Message::FileInfoHash).into_owned(),
+                digest.clone(),
+            ),
+        };
+        body = body.child(hash);
         if projection.shortcut_target.is_some() {
             match self.file_info_shortcut.state() {
                 crate::file_info_shortcut::State::Unavailable => {}
@@ -2077,35 +2099,17 @@ impl FilerShell {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(6.0))
+                    .gap(px(12.0))
                     .child(
-                        div()
-                            .id("file-info-copy-name")
+                        copy_button("file-info-copy-name")
                             .track_focus(&self.file_info_focus)
-                            .focusable()
-                            .h(px(44.0))
-                            .px(px(10.0))
-                            .flex()
-                            .items_center()
-                            .border_1()
-                            .border_color(gpui_filer_ui::theme_palette(cx).border)
-                            .rounded(px(4.0))
                             .child(self.translator.text(Message::FileInfoCopyName).into_owned())
                             .on_click(name_click)
                             .on_key_down(key_name),
                     )
                     .child(
-                        div()
-                            .id("file-info-copy-location")
+                        copy_button("file-info-copy-location")
                             .track_focus(&self.file_info_focus)
-                            .focusable()
-                            .h(px(44.0))
-                            .px(px(10.0))
-                            .flex()
-                            .items_center()
-                            .border_1()
-                            .border_color(gpui_filer_ui::theme_palette(cx).border)
-                            .rounded(px(4.0))
                             .child(
                                 self.translator
                                     .text(Message::FileInfoCopyLocation)

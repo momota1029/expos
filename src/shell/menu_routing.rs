@@ -2,6 +2,11 @@
 
 use super::*;
 
+pub(super) struct ContextMenuRows {
+    pub(super) rows: Vec<menu::Row>,
+    pub(super) separators: Vec<usize>,
+}
+
 pub(super) fn context_menu_view_available(batch_rename_active: bool) -> bool {
     !batch_rename_active
 }
@@ -229,13 +234,9 @@ impl FilerShell {
         if self.menu.open_menu() == Some(menu) {
             return;
         }
-        if menu == menu::Menu::View {
-            self.view_menu_scroll
-                .set_offset(gpui::point(gpui::px(0.0), gpui::px(0.0)));
-            self.view_menu_root_scroll
-                .set_offset(gpui::point(gpui::px(0.0), gpui::px(0.0)));
-        }
         self.menu.show_menu(menu);
+        self.menu_panel_scroll(menu::Open::Menu(menu), false)
+            .set_offset(gpui::point(gpui::px(0.0), gpui::px(0.0)));
         self.workspace_menu_target = None;
         self.menu_target = Some(self.capture_menu_target(None, cx));
         self.tab_menu_target = None;
@@ -294,7 +295,7 @@ impl FilerShell {
                     let rows = if self.menu.open() == Some(menu::Open::Menu(menu::Menu::View)) {
                         self.view_menu_root_rows(cx)
                     } else {
-                        self.context_menu_root_rows(self.menu_entries(cx))
+                        self.context_menu_root_rows(self.menu_entries(cx)).rows
                     };
                     if matches!(
                         rows.get(self.menu.highlight_index()),
@@ -1090,7 +1091,7 @@ impl FilerShell {
                         _ => entries.into_iter().map(menu::Row::Leaf).collect(),
                     };
                 }
-                return self.context_menu_root_rows(entries);
+                return self.context_menu_root_rows(entries).rows;
             }
             let mut rows = entries.into_iter().map(menu::Row::Leaf).collect::<Vec<_>>();
             if open == menu::Open::Menu(menu::Menu::File) {
@@ -1200,16 +1201,21 @@ impl FilerShell {
         }
     }
 
-    pub(super) fn context_menu_root_rows(&self, entries: Vec<menu::Entry>) -> Vec<menu::Row> {
+    pub(super) fn context_menu_root_rows(&self, entries: Vec<menu::Entry>) -> ContextMenuRows {
         let item_popup = self.menu.open() == Some(menu::Open::Popup(menu::Popup::Item));
         let has = |actions: &[&str]| {
             entries
                 .iter()
                 .any(|row| actions.contains(&row.action.as_str()))
         };
-        let mut rows = Vec::new();
+        let mut navigation = Vec::new();
+        let mut clipboard = Vec::new();
+        let mut editing = Vec::new();
+        let mut creation = Vec::new();
+        let mut archive = Vec::new();
+        let mut view = Vec::new();
         if has(&[menu::CREATE_ZIP, menu::CREATE_7Z]) {
-            rows.push(menu::Row::Branch {
+            archive.push(menu::Row::Branch {
                 submenu: menu::ViewSubmenu::Compression,
                 label: self
                     .translator
@@ -1217,10 +1223,13 @@ impl FilerShell {
                     .into_owned(),
             });
         }
-        if has(&[input::CREATE_FILE, input::CREATE_FOLDER, input::PASTE_JUNCTION])
-            || (!item_popup && has(&[input::PASTE_LINK]))
+        if has(&[
+            input::CREATE_FILE,
+            input::CREATE_FOLDER,
+            input::PASTE_JUNCTION,
+        ]) || (!item_popup && has(&[input::PASTE_LINK]))
         {
-            rows.push(menu::Row::Branch {
+            creation.push(menu::Row::Branch {
                 submenu: menu::ViewSubmenu::Creation,
                 label: self
                     .translator
@@ -1228,23 +1237,46 @@ impl FilerShell {
                     .into_owned(),
             });
         }
-        rows.extend(
-            entries
-                .into_iter()
-                .filter(|row| {
-                    !matches!(
-                        row.action.as_str(),
-                        menu::CREATE_ZIP
-                            | menu::CREATE_7Z
-                            | input::CREATE_FILE
-                            | input::CREATE_FOLDER
-                            | input::PASTE_JUNCTION
-                    )
-                        && (item_popup || row.action.as_str() != input::PASTE_LINK)
-                })
-                .map(menu::Row::Leaf),
-        );
-        rows
+        for entry in entries {
+            let group = match entry.action.as_str() {
+                menu::CREATE_ZIP
+                | menu::CREATE_7Z
+                | input::CREATE_FILE
+                | input::CREATE_FOLDER
+                | input::PASTE_JUNCTION => continue,
+                input::PASTE_LINK if !item_popup => continue,
+                input::ACTIVATE
+                | input::ACTIVATE_NEW_TAB
+                | input::NAVIGATE_BACK
+                | input::NAVIGATE_FORWARD
+                | menu::OPEN_IN_NEW_PANE
+                | menu::OPEN_IN_TERMINAL => &mut navigation,
+                input::COPY
+                | input::CUT
+                | input::COPY_PATHS
+                | input::COPY_NAMES
+                | input::COPY_CURRENT_PATH
+                | input::PASTE
+                | input::PASTE_HERE
+                | input::PASTE_LINK => &mut clipboard,
+                input::RENAME | input::BATCH_RENAME | input::DELETE_TO_TRASH => &mut editing,
+                menu::CREATE_SHORTCUT => &mut creation,
+                menu::EXTRACT_TO_FOLDER => &mut archive,
+                _ => &mut view,
+            };
+            group.push(menu::Row::Leaf(entry));
+        }
+        let mut rows = Vec::new();
+        let mut separators = Vec::new();
+        for group in [navigation, clipboard, editing, creation, archive, view] {
+            if !group.is_empty() {
+                if !rows.is_empty() {
+                    separators.push(rows.len());
+                }
+                rows.extend(group);
+            }
+        }
+        ContextMenuRows { rows, separators }
     }
 
     /// 選んでいる行を動かす。端では止める。
@@ -1252,65 +1284,34 @@ impl FilerShell {
     /// dropdown がまだ開いていないときの上下は、バーへの入口にする。バーをキーで開く
     /// 割り当てはまだ無いので、指で出したあとキーだけでも中へ入れるようにしている。
     pub(super) fn move_menu_highlight(&mut self, offset: isize, cx: &mut Context<Self>) {
-        if !self.menu.is_open() {
+        let Some(open) = self.menu.open() else {
             if self.menu.bar_visible() {
                 self.show_menu(menu::Menu::ALL[0], cx);
             }
             return;
-        }
-        let rows = self.menu_rows(cx);
+        };
+        let child = self.menu.view_submenu().is_some();
+        let (rows, separators) = if !child
+            && matches!(
+                open,
+                menu::Open::Popup(menu::Popup::Item | menu::Popup::Background)
+            ) {
+            let projection = self.context_menu_root_rows(self.menu_entries(cx));
+            (projection.rows, projection.separators)
+        } else {
+            (self.menu_rows(cx), Vec::new())
+        };
         self.menu.move_highlight(offset, rows.len());
-        if self.menu.open() == Some(menu::Open::Popup(menu::Popup::ReopenTabs)) {
-            let top = self.menu.highlight_index() as f32 * super::menu_surface::REOPEN_ROW_HEIGHT;
-            self.reopen_scroll
-                .set_offset(gpui::point(gpui::px(0.0), -gpui::px(top)));
-        } else if self.menu.open() == Some(menu::Open::Menu(menu::Menu::View)) {
-            let root_open = self.menu.view_submenu().is_none();
-            let scroll = if root_open {
-                &self.view_menu_root_scroll
-            } else {
-                &self.view_menu_scroll
-            };
-            let visible_height = scroll.bounds().size.height.as_f32();
-            let content_height = rows.len() as f32 * super::menu_surface::VIEW_ROW_HEIGHT;
-            let row_height = super::menu_surface::VIEW_ROW_HEIGHT;
-            let top = super::menu_surface::reveal_scroll_offset(
-                -scroll.offset().y.as_f32(),
-                self.menu.highlight_index() as f32 * row_height,
-                row_height,
-                visible_height,
-                content_height,
-            );
-            scroll.set_offset(gpui::point(gpui::px(0.0), -gpui::px(top)));
-        } else if matches!(
-            self.menu.open(),
-            Some(menu::Open::Popup(
-                menu::Popup::Item | menu::Popup::Background
-            ))
-        ) {
-            let scroll = if self.menu.view_submenu().is_some() {
-                &self.view_menu_scroll
-            } else {
-                &self.context_popup_scroll
-            };
-            let row_height = if self
-                .menu_target
-                .as_ref()
-                .is_some_and(|target| target.touch_target)
-            {
-                super::menu_surface::TOUCH_CONTEXT_ROW_HEIGHT
-            } else {
-                super::menu_surface::ROW_HEIGHT
-            };
-            let top = super::menu_surface::reveal_scroll_offset(
-                -scroll.offset().y.as_f32(),
-                self.menu.highlight_index() as f32 * row_height,
-                row_height,
-                scroll.bounds().size.height.as_f32(),
-                rows.len() as f32 * row_height,
-            );
-            scroll.set_offset(gpui::point(gpui::px(0.0), -gpui::px(top)));
-        }
+        let scroll = self.menu_panel_scroll(open, child);
+        let row_height = self.menu_row_height(open);
+        let top = super::menu_surface::reveal_scroll_offset(
+            -scroll.offset().y.as_f32(),
+            super::menu_surface::menu_row_top(self.menu.highlight_index(), row_height, &separators),
+            row_height,
+            scroll.bounds().size.height.as_f32(),
+            super::menu_surface::menu_row_top(rows.len(), row_height, &separators),
+        );
+        scroll.set_offset(gpui::point(gpui::px(0.0), -gpui::px(top)));
         cx.notify();
     }
 
@@ -1323,7 +1324,7 @@ impl FilerShell {
                 menu::Popup::Item | menu::Popup::Background
             ))
         ) {
-            self.context_menu_root_rows(self.menu_entries(cx))
+            self.context_menu_root_rows(self.menu_entries(cx)).rows
         } else {
             return;
         };
@@ -1341,7 +1342,7 @@ impl FilerShell {
                 menu::Popup::Item | menu::Popup::Background
             ))
         ) {
-            self.context_menu_root_rows(self.menu_entries(cx))
+            self.context_menu_root_rows(self.menu_entries(cx)).rows
         } else {
             return;
         };
@@ -1359,18 +1360,8 @@ impl FilerShell {
         let changed = self.menu.view_submenu() != Some(submenu);
         self.menu.open_submenu(submenu, parent_index);
         if changed {
-            if matches!(
-                self.menu.open(),
-                Some(menu::Open::Popup(
-                    menu::Popup::Item | menu::Popup::Background
-                ))
-            ) {
-                self.context_popup_scroll
-                    .set_offset(gpui::point(gpui::px(0.0), gpui::px(0.0)));
-            } else {
-                self.view_menu_scroll
-                    .set_offset(gpui::point(gpui::px(0.0), gpui::px(0.0)));
-            }
+            self.view_menu_scroll
+                .set_offset(gpui::point(gpui::px(0.0), gpui::px(0.0)));
         }
         cx.notify();
     }
@@ -1424,7 +1415,7 @@ impl FilerShell {
                 menu::Popup::Item | menu::Popup::Background
             ))
         ) {
-            self.context_menu_root_rows(self.menu_entries(cx))
+            self.context_menu_root_rows(self.menu_entries(cx)).rows
         } else {
             return;
         };
@@ -1664,6 +1655,8 @@ impl FilerShell {
             self.close_folder_tree_menu(cx);
         }
         self.menu.open_popup(menu::Popup::Tab);
+        self.menu_panel_scroll(menu::Open::Popup(menu::Popup::Tab), false)
+            .set_offset(gpui::point(gpui::px(0.0), gpui::px(0.0)));
         self.menu_target = None;
         self.workspace_menu_target = None;
         self.tab_menu_target = Some(menu::TabMenuTarget {
@@ -1702,6 +1695,8 @@ impl FilerShell {
         }
         self.workspace_restore_menu_open = false;
         self.menu.open_popup(menu::Popup::Workspace);
+        self.menu_panel_scroll(menu::Open::Popup(menu::Popup::Workspace), false)
+            .set_offset(gpui::point(gpui::px(0.0), gpui::px(0.0)));
         self.menu_target = None;
         self.tab_menu_target = None;
         self.reopen_menu_targets = None;

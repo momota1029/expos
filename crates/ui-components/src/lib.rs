@@ -23,8 +23,9 @@ pub use theme::{
 
 type CheckboxListener = Box<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App)>;
 
-/// チェックボックスのhit領域。タッチ用の最小値で、外側のレイアウトもこれを基準にする。
+/// チェックボックスのhit領域の幅と通常の高さ。外側のレイアウトもこれを基準にする。
 pub const CHECKBOX_HIT_SIZE: f32 = 44.0;
+pub const CHECKBOX_COMPACT_HEIGHT: f32 = 36.0;
 
 /// チェックボックスの見える箱を、44pxのhit領域のどこへ寄せるか。
 ///
@@ -45,6 +46,7 @@ pub struct SelectionCheckbox {
     checked: bool,
     indeterminate: bool,
     align: CheckboxAlign,
+    hit_height: f32,
     on_toggle: CheckboxListener,
 }
 
@@ -59,6 +61,7 @@ impl SelectionCheckbox {
             checked,
             indeterminate: false,
             align: CheckboxAlign::Center,
+            hit_height: CHECKBOX_HIT_SIZE,
             on_toggle: Box::new(on_toggle),
         }
     }
@@ -69,8 +72,13 @@ impl SelectionCheckbox {
         self
     }
 
-    /// 集合の一部だけが選ばれている状態。通常の checkbox と同じ hit 領域・箱を使い、
-    /// section heading だけ別物に見えないようにする。
+    /// 低い見出しに収めても、横方向の hit 領域は 44px を保つ。
+    pub fn compact(mut self) -> Self {
+        self.hit_height = CHECKBOX_COMPACT_HEIGHT;
+        self
+    }
+
+    /// 集合の一部だけが選ばれている状態。
     pub fn indeterminate(mut self, indeterminate: bool) -> Self {
         self.indeterminate = indeterminate;
         self
@@ -115,7 +123,8 @@ impl RenderOnce for SelectionCheckbox {
         }
         div()
             .id(self.id)
-            .size(px(CHECKBOX_HIT_SIZE))
+            .w(px(CHECKBOX_HIT_SIZE))
+            .h(px(self.hit_height))
             .flex_shrink_0()
             .flex()
             .items_center()

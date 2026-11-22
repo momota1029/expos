@@ -3,7 +3,6 @@ use gpui::{
     SharedString, StatefulInteractiveElement as _, Styled as _, div, prelude::FluentBuilder as _,
     px,
 };
-use gpui_filer_ui::BORDER;
 
 use crate::{
     CELL_PADDING_X, CELL_PADDING_Y, CHROME_FONT_SIZE, DirectoryListDemo, HEADER_HEIGHT,
@@ -12,8 +11,11 @@ use crate::{
     sorting::{Column, SortState},
 };
 
-const ROW_CHECKBOX_WIDTH: f32 = 44.0;
+const ROW_CHECKBOX_WIDTH: f32 = gpui_filer_ui::CHECKBOX_HIT_SIZE;
 const MIN_NAME_CELL_WIDTH: f32 = 144.0;
+const MAX_NAME_CELL_WIDTH: f32 = 640.0;
+const COLUMN_DIVIDER_WIDTH: f32 = 1.0;
+const HEADER_DIVIDER_OPACITY: f32 = 0.08;
 
 /// Rows header と body が共有する、view 幅から導く列 projection。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -26,11 +28,15 @@ pub(super) struct RowColumns {
     pub(super) order: [Column; 4],
 }
 
-pub(super) fn project_columns(
-    view_width: f32,
-    enabled: crate::folder_view_preferences::ColumnPrefs,
-) -> RowColumns {
-    project_columns_with_checkbox(view_width, enabled, true)
+impl RowColumns {
+    pub(super) fn visible_columns(self) -> impl Iterator<Item = Column> {
+        self.order.into_iter().filter(move |column| match column {
+            Column::Name => true,
+            Column::Kind => self.kind,
+            Column::Size => self.size,
+            Column::Modified => self.modified,
+        })
+    }
 }
 
 pub(super) fn project_columns_with_checkbox(
@@ -52,49 +58,34 @@ pub(super) fn project_columns_with_checkbox(
         name_width: 0.0,
         order: enabled.order,
     };
-    let required_width = |columns: RowColumns| {
-        MIN_NAME_CELL_WIDTH
-            + if columns.kind {
-                enabled.kind_width + 1.0
-            } else {
-                0.0
-            }
-            + if columns.size {
-                enabled.size_width + 1.0
-            } else {
-                0.0
-            }
-            + if columns.modified {
-                enabled.modified_width + 1.0
-            } else {
-                0.0
-            }
-    };
-    if content_width < required_width(columns) {
-        columns.modified = false;
+    let kind_width = enabled.kind_width + COLUMN_DIVIDER_WIDTH;
+    let modified_width = enabled.modified_width + COLUMN_DIVIDER_WIDTH;
+    let size_width = enabled.size_width + COLUMN_DIVIDER_WIDTH;
+    let mut metadata_width = 0.0;
+    if columns.kind {
+        metadata_width += kind_width;
     }
-    if content_width < required_width(columns) {
-        columns.size = false;
+    if columns.modified {
+        metadata_width += modified_width;
     }
-    if content_width < required_width(columns) {
+    if columns.size {
+        metadata_width += size_width;
+    }
+    // 幅が足りないときだけ投影から外す。並び順や保存済みの幅は変えない。
+    if columns.kind && content_width < MIN_NAME_CELL_WIDTH + metadata_width {
         columns.kind = false;
+        metadata_width -= kind_width;
     }
-    let metadata_width = if columns.kind {
-        enabled.kind_width + 1.0
-    } else {
-        0.0
-    } + if columns.size {
-        enabled.size_width + 1.0
-    } else {
-        0.0
-    } + if columns.modified {
-        enabled.modified_width + 1.0
-    } else {
-        0.0
-    };
-    // 狭い pane では列を縮めて一文字折り返しにせず、Name cell を通常幅のまま
-    // viewport の clip に任せる。header/body とも同じ projection を使う。
-    columns.name_width = (content_width - metadata_width).max(MIN_NAME_CELL_WIDTH);
+    if columns.modified && content_width < MIN_NAME_CELL_WIDTH + metadata_width {
+        columns.modified = false;
+        metadata_width -= modified_width;
+    }
+    if columns.size && content_width < MIN_NAME_CELL_WIDTH + metadata_width {
+        columns.size = false;
+        metadata_width -= size_width;
+    }
+    // Name しか残らない幅ではそのセルも縮める。広い pane の余りは末尾へ残す。
+    columns.name_width = (content_width - metadata_width).clamp(0.0, MAX_NAME_CELL_WIDTH);
     columns
 }
 
@@ -111,12 +102,16 @@ pub(super) fn detail_cell(text: impl Into<SharedString>, width: f32) -> gpui::Di
         .child(div().flex_1().min_w_0().truncate().child(text.into()))
 }
 
-fn resize_divider(left: Column, right: Column, cx: &mut Context<DirectoryListDemo>) -> gpui::Div {
+fn resize_divider(
+    left: Column,
+    right: Column,
+    divider: gpui::Rgba,
+    cx: &mut Context<DirectoryListDemo>,
+) -> gpui::Div {
     div()
         .relative()
-        .w(px(1.0))
-        .bg(BORDER)
-        .opacity(0.6)
+        .w(px(COLUMN_DIVIDER_WIDTH))
+        .bg(divider)
         .flex_shrink_0()
         .child(
             div()
@@ -182,13 +177,9 @@ fn resize_divider(left: Column, right: Column, cx: &mut Context<DirectoryListDem
         )
 }
 
-pub(super) fn column_divider() -> gpui::Div {
-    div()
-        .w(px(1.0))
-        .h_full()
-        .bg(BORDER)
-        .opacity(0.6)
-        .flex_shrink_0()
+pub(super) fn column_spacing() -> gpui::Div {
+    // 本文には線を描かず、ヘッダと列の開始位置を揃える幅だけ残す。
+    div().w(px(COLUMN_DIVIDER_WIDTH)).flex_shrink_0()
 }
 
 /// 列ヘッダの1セル。クリックで並べ替えを切り替える。
@@ -221,7 +212,7 @@ pub(super) fn header_cell(
         .when(active, |cell| {
             cell.text_color(gpui_filer_ui::theme_palette(cx).text)
         })
-        .hover(|cell| cell.bg(gpui_filer_ui::theme_palette(cx).border))
+        .hover(|cell| cell.bg(gpui_filer_ui::theme_palette(cx).chrome_hover))
         .child(
             div()
                 .w_full()
@@ -291,17 +282,16 @@ pub(super) fn rows_header(
     enabled: crate::folder_view_preferences::ColumnPrefs,
     cx: &mut Context<DirectoryListDemo>,
 ) -> gpui::Div {
+    let palette = gpui_filer_ui::theme_palette(cx);
+    // テーマの border はアクセント色を取ることがあるため、文字色から薄い区切りを作る。
+    let divider = palette.text.opacity(HEADER_DIVIDER_OPACITY);
     let name = header_cell(
         Column::Name,
         &translator.text(Message::ColumnName),
-        // Name 列は残り幅を使うので、幅は flex 側で決める。
-        0.0,
+        columns.name_width,
         sort,
         cx,
-    )
-    .w_auto()
-    .min_w(px(columns.name_width))
-    .w(px(columns.name_width));
+    );
     let kind = header_cell(
         Column::Kind,
         &translator.text(Message::ColumnKind),
@@ -331,18 +321,10 @@ pub(super) fn rows_header(
     let mut modified = Some(modified.into_any_element());
     let mut ordered_cells = Vec::with_capacity(7);
     let mut previous = None;
-    for column in enabled.order {
-        let visible = match column {
-            Column::Name => true,
-            Column::Kind => columns.kind,
-            Column::Size => columns.size,
-            Column::Modified => columns.modified,
-        };
-        if !visible {
-            continue;
-        }
+    for column in columns.visible_columns() {
         if !ordered_cells.is_empty() {
-            ordered_cells.push(resize_divider(previous.unwrap(), column, cx).into_any_element());
+            ordered_cells
+                .push(resize_divider(previous.unwrap(), column, divider, cx).into_any_element());
         }
         ordered_cells.push(match column {
             Column::Name => name.take().unwrap(),
@@ -360,9 +342,10 @@ pub(super) fn rows_header(
         .flex_none()
         .flex()
         .items_stretch()
-        .bg(gpui_filer_ui::theme_palette(cx).surface_header)
+        .overflow_hidden()
+        .bg(palette.surface_header)
         .border_b_1()
-        .border_color(gpui_filer_ui::theme_palette(cx).border)
+        .border_color(divider)
         .text_color(foreground)
         .text_size(px(CHROME_FONT_SIZE))
         .child(
@@ -385,8 +368,8 @@ mod tests {
     fn checkbox_visibility_keeps_header_and_body_column_geometry_in_sync() {
         let mut prefs = crate::folder_view_preferences::ColumnPrefs::default();
         prefs.order = [Column::Kind, Column::Name, Column::Size, Column::Modified];
-        let with_checkbox = project_columns_with_checkbox(1100.0, prefs, true);
-        let without_checkbox = project_columns_with_checkbox(1100.0, prefs, false);
+        let with_checkbox = project_columns_with_checkbox(1000.0, prefs, true);
+        let without_checkbox = project_columns_with_checkbox(1000.0, prefs, false);
 
         assert_eq!(with_checkbox.order, without_checkbox.order);
         assert_eq!(with_checkbox.kind, without_checkbox.kind);
@@ -435,36 +418,38 @@ mod tests {
 
     #[test]
     fn columns_hide_metadata_in_priority_order_and_restore_at_thresholds() {
-        let all_columns = 487.0;
-        let no_modified = 487.0;
-        let no_size = 366.0;
-        let name_only = 285.0;
-
         let enabled = crate::folder_view_preferences::ColumnPrefs::default();
-        let all = project_columns(all_columns, enabled);
+        let project = |width| project_columns_with_checkbox(width, enabled, true);
+        let name_threshold = ROW_PADDING_X * 2.0 + ROW_CHECKBOX_WIDTH + MIN_NAME_CELL_WIDTH;
+        let size_threshold = name_threshold + enabled.size_width + COLUMN_DIVIDER_WIDTH;
+        let modified_threshold = size_threshold + enabled.modified_width + COLUMN_DIVIDER_WIDTH;
+        let kind_threshold = modified_threshold + enabled.kind_width + COLUMN_DIVIDER_WIDTH;
+
+        let all = project(kind_threshold);
         assert!(all.kind && all.size && all.modified);
         assert_eq!(all.name_width, MIN_NAME_CELL_WIDTH);
 
-        let modified_hidden = project_columns(no_modified - 0.1, enabled);
-        assert!(modified_hidden.kind && modified_hidden.size);
-        assert!(!modified_hidden.modified);
+        let kind_hidden = project(kind_threshold - 0.1);
+        assert!(!kind_hidden.kind && kind_hidden.size && kind_hidden.modified);
+        assert!(kind_hidden.name_width >= MIN_NAME_CELL_WIDTH);
+
+        let modified_hidden = project(modified_threshold - 0.1);
+        assert!(!modified_hidden.kind && modified_hidden.size && !modified_hidden.modified);
         assert!(modified_hidden.name_width >= MIN_NAME_CELL_WIDTH);
 
-        let size_hidden = project_columns(no_size - 0.1, enabled);
-        assert!(size_hidden.kind);
-        assert!(!size_hidden.size && !size_hidden.modified);
-        assert!(size_hidden.name_width >= MIN_NAME_CELL_WIDTH);
-
-        let name_only_columns = project_columns(name_only - 0.1, enabled);
+        let name_only_columns = project(size_threshold - 0.1);
         assert!(!name_only_columns.kind && !name_only_columns.size && !name_only_columns.modified);
         assert!(name_only_columns.name_width >= MIN_NAME_CELL_WIDTH);
 
-        let narrow = project_columns(180.0, enabled);
+        let narrow = project(180.0);
         assert!(!narrow.kind && !narrow.size && !narrow.modified);
-        assert_eq!(narrow.name_width, MIN_NAME_CELL_WIDTH);
+        assert_eq!(
+            narrow.name_width,
+            180.0 - ROW_PADDING_X * 2.0 - ROW_CHECKBOX_WIDTH
+        );
 
-        let wide = project_columns(2500.0, enabled);
+        let wide = project(2500.0);
         assert!(wide.kind && wide.size && wide.modified);
-        assert!(wide.name_width > all.name_width);
+        assert_eq!(wide.name_width, MAX_NAME_CELL_WIDTH);
     }
 }

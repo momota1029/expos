@@ -1255,6 +1255,8 @@ pub struct PaneSnapshot {
 pub struct WorkspaceSnapshot {
     pub id: u64,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_name_number: Option<std::num::NonZeroUsize>,
     pub panes: Vec<PaneSnapshot>,
     pub pane_layout: PaneLayoutSnapshot,
     pub focused_pane: u64,
@@ -1899,6 +1901,7 @@ fn migrated_workspace(
     vec![WorkspaceSnapshot {
         id: 1,
         name: "Workspace 1".into(),
+        default_name_number: std::num::NonZeroUsize::new(1),
         panes,
         pane_layout,
         focused_pane,

@@ -2961,6 +2961,14 @@ impl OperationService {
             .collect()
     }
 
+    pub(crate) fn current_terminal_receipts(&self, token: AttemptToken) -> Option<&[ItemReceipt]> {
+        let attempt = self.jobs.get(&token.job)?.attempts.last()?;
+        if attempt.token != token {
+            return None;
+        }
+        Some(&attempt.terminal.as_ref()?.receipts)
+    }
+
     pub fn progress_rows(&self) -> Vec<ProgressRowSnapshot> {
         self.jobs.values().filter_map(|job| {
             let attempt = job.attempts.last()?;

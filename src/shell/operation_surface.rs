@@ -1,5 +1,6 @@
 use super::*;
 use std::{
+    borrow::Cow,
     collections::VecDeque,
     time::{Duration, Instant},
 };
@@ -179,21 +180,20 @@ impl FilerShell {
     pub(super) fn render_docked_job_progress(&self, pane_id: PaneId, cx: &mut Context<Self>) -> gpui::AnyElement {
         let workspace_id = self.workspace.active;
         let topology_revision = self.workspace.active().topology_revision;
+        let palette = gpui_filer_ui::theme_palette(cx);
         let rows = cx.global::<operations::application::OperationApplicationOwner>().runtime.progress_rows();
         let rows = rows.into_iter().map(|row| {
             let token = row.token;
             let can_cancel = matches!(row.state, operations::model::AttemptState::Preparing | operations::model::AttemptState::Running);
             let can_retry = row.retryable;
-            let status = row.terminal_outcome.map_or_else(|| format!("{:?}", row.state), |outcome| format!("{outcome:?}"));
-            let progress = row.counters.map_or_else(|| "Waiting for progress".to_owned(), |c| format!("{} items · {} bytes", c.processed_items, format_operation_bytes(c.processed_bytes)));
             div().flex().items_center().justify_between().gap(px(8.0)).py(px(6.0))
-                .child(div().flex_1().child(format!("{:?} · {status}\n{progress}", row.kind)))
-                .when(can_cancel, |item| item.child(div().id(format!("docked-progress-cancel-{token:?}")).min_w(px(64.0)).h(px(44.0)).flex().items_center().justify_center().child("Cancel")
+                .child(render_job_progress_row_label(&row, &self.translator, palette, cx))
+                .when(can_cancel, |item| item.child(job_progress_button(format!("docked-progress-cancel-{token:?}"), self.translator.text(Message::ConflictCancel).into_owned(), palette)
                     .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| if event.standard_click() {
                         let _ = cx.global_mut::<operations::application::OperationApplicationOwner>().runtime.cancel(token);
                         this.record_active_operation(cx); cx.notify();
                     }))))
-                .when(can_retry, |item| item.child(div().id(format!("docked-progress-retry-{token:?}")).focusable().tab_stop(true).focus_visible(|style| style.border_1().border_color(ON_ACCENT)).min_w(px(64.0)).h(px(44.0)).flex().items_center().justify_center().child(self.translator.text(Message::Retry).into_owned())
+                .when(can_retry, |item| item.child(job_progress_button(format!("docked-progress-retry-{token:?}"), self.translator.text(Message::Retry).into_owned(), palette).focusable().tab_stop(true)
                     .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| if event.standard_click() {
                         this.retry_operation(token, window, cx);
                     }))
@@ -206,12 +206,11 @@ impl FilerShell {
                 .into_any_element()
         });
         div().id(("docked-job-progress", pane_id.0)).flex().flex_col().size_full().min_w_0().min_h_0()
-            .bg(gpui_filer_ui::theme_palette(cx).surface_base)
+            .bg(palette.surface_base).text_color(palette.text)
             .child(div().h(px(PANE_HEADER_HEIGHT)).flex_shrink_0().flex().items_center().justify_between().px(px(12.0))
-                .border_b_1().border_color(gpui_filer_ui::theme_palette(cx).border).child("Job progress")
-                .child(div().id("docked-progress-close").track_focus(&self.job_progress_close_focus).focusable().tab_stop(true)
-                    .focus_visible(|style| style.border_1().border_color(ON_ACCENT))
-                    .min_w(px(64.0)).h(px(44.0)).flex().items_center().justify_center().child("Close")
+                .border_b_1().border_color(palette.border).child(self.translator.text(Message::JobProgressTitle).into_owned())
+                .child(job_progress_button("docked-progress-close", self.translator.text(Message::JobProgressClose).into_owned(), palette)
+                    .track_focus(&self.job_progress_close_focus).focusable().tab_stop(true)
                     .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| if event.standard_click() {
                         this.close_floating_job_progress(workspace_id, pane_id, topology_revision, cx);
                     }))
@@ -275,6 +274,9 @@ impl FilerShell {
         let workspace_id = self.workspace.active;
         let topology_revision = self.workspace.active().topology_revision;
         let generation = job.generation;
+        let palette = gpui_filer_ui::theme_palette(cx);
+        let title = self.translator.text(Message::JobProgressTitle).into_owned();
+        let drag_title = title.clone();
         // GPUI dispatches threshold-crossing mouse movement synchronously; bind the
         // candidate nonce before pointer-down so the drag payload matches its capture.
         let dock_payload = JobProgressDockPayload {
@@ -290,25 +292,9 @@ impl FilerShell {
             .runtime
             .progress_rows();
         let rows = rows.into_iter().map(|row| {
-            let state = row.terminal_outcome.map_or_else(
-                || format!("{:?}", row.state),
-                |outcome| format!("{outcome:?}"),
-            );
-            let progress = row.counters.map_or_else(
-                || "Waiting for progress".to_owned(),
-                |counters| {
-                    format!(
-                        "{} items · {} bytes",
-                        counters.processed_items,
-                        format_operation_bytes(counters.processed_bytes)
-                    )
-                },
-            );
-            (row.token, row.state, row.retryable, format!("{:?} · {state}\n{progress}", row.kind))
-        });
-        let rows = rows.map(|(token, state, retryable, description)| {
+            let token = row.token;
             let can_cancel = matches!(
-                state,
+                row.state,
                 operations::model::AttemptState::Preparing
                     | operations::model::AttemptState::Running
             );
@@ -318,19 +304,14 @@ impl FilerShell {
                 .justify_between()
                 .gap(px(8.0))
                 .py(px(6.0))
-                .child(div().flex_1().text_size(px(12.0)).child(description))
+                .child(render_job_progress_row_label(&row, &self.translator, palette, cx))
                 .when(can_cancel, |row| {
                     row.child(
-                        div()
-                            .min_w(px(64.0))
-                            .h(px(44.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(RADIUS_SM))
-                            .id(format!("job-progress-cancel-{:?}", token))
-                            .hover(|style| style.bg(CHROME_HOVER))
-                            .child("Cancel")
+                        job_progress_button(
+                            format!("job-progress-cancel-{token:?}"),
+                            self.translator.text(Message::ConflictCancel).into_owned(),
+                            palette,
+                        )
                             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
                                 if event.standard_click() {
                                     let _ = cx.global_mut::<operations::application::OperationApplicationOwner>().runtime.cancel(token);
@@ -340,21 +321,15 @@ impl FilerShell {
                             })),
                     )
                 })
-                .when(retryable, |row| {
+                .when(row.retryable, |row| {
                     row.child(
-                        div()
-                            .min_w(px(64.0))
-                            .h(px(44.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(RADIUS_SM))
-                            .id(format!("job-progress-retry-{:?}", token))
+                        job_progress_button(
+                            format!("job-progress-retry-{token:?}"),
+                            self.translator.text(Message::Retry).into_owned(),
+                            palette,
+                        )
                             .focusable()
                             .tab_stop(true)
-                            .focus_visible(|style| style.border_1().border_color(ON_ACCENT))
-                            .hover(|style| style.bg(CHROME_HOVER))
-                            .child(self.translator.text(Message::Retry).into_owned())
                             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                 if event.standard_click() {
                                     this.retry_operation(token, window, cx);
@@ -381,8 +356,9 @@ impl FilerShell {
                 .p(px(12.0))
                 .rounded(px(RADIUS_MD))
                 .border_1()
-                .border_color(BORDER)
-                .bg(ACCENT)
+                .border_color(palette.text.opacity(0.16))
+                .bg(palette.surface_raised)
+                .text_color(palette.text)
                 .shadow_lg()
                 .on_mouse_down(gpui::MouseButton::Left, cx.listener(|_, _, _, cx| cx.stop_propagation()))
                 .on_mouse_down(gpui::MouseButton::Right, cx.listener(|_, _, _, cx| cx.stop_propagation()))
@@ -408,26 +384,20 @@ impl FilerShell {
                                     && dock_admission.get() == Some(dock_payload.contact_generation)
                             },
                             move |_, _, _, cx| {
-                                cx.new(|_| PaneReorderGhost { title: "Job progress".into() })
+                                cx.new(|_| PaneReorderGhost { title: drag_title.clone() })
                             },
                         )
-                        .child(div().text_size(px(14.0)).child("Job progress")))
-                        .child(div().flex().items_center().gap(px(8.0))
+                        .child(div().text_size(px(14.0)).font_weight(gpui::FontWeight::SEMIBOLD).child(title)))
+                        .child(div().flex().items_center().gap(px(2.0))
                         .child(
-                            div()
-                                .id("job-progress-details")
+                            job_progress_button(
+                                "job-progress-details",
+                                self.translator.text(Message::JobProgressDetails).into_owned(),
+                                palette,
+                            )
                                 .track_focus(&self.job_progress_details_focus)
                                 .focusable()
                                 .tab_stop(true)
-                                .focus_visible(|style| style.border_1().border_color(ON_ACCENT))
-                                .min_w(px(64.0))
-                                .h(px(44.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(RADIUS_SM))
-                                .hover(|style| style.bg(CHROME_HOVER))
-                                .child("Details")
                                 .on_click(cx.listener(|this, event: &gpui::ClickEvent, _window, cx| {
                                     if event.standard_click() {
                                         this.operation_progress_open = true;
@@ -445,20 +415,14 @@ impl FilerShell {
                                 })),
                         )
                         .child(
-                            div()
-                                .id("job-progress-close")
-                                .min_w(px(64.0))
-                                .h(px(44.0))
+                            job_progress_button(
+                                "job-progress-close",
+                                self.translator.text(Message::JobProgressClose).into_owned(),
+                                palette,
+                            )
                                 .track_focus(&self.job_progress_close_focus)
                                 .focusable()
                                 .tab_stop(true)
-                                .focus_visible(|style| style.border_1().border_color(ON_ACCENT))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(RADIUS_SM))
-                                .hover(|style| style.bg(CHROME_HOVER))
-                                .child("Close")
                                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
                                     if event.standard_click() {
                                         this.close_floating_job_progress(workspace_id, pane_id, topology_revision, cx);
@@ -935,6 +899,15 @@ impl FilerShell {
         if !self.operation_progress_open {
             return None;
         }
+        let palette = gpui_filer_ui::theme_palette(cx);
+        let divider = palette.text.opacity(0.10);
+        let header_height = 56.0;
+        let viewport_height = window.viewport_size().height.as_f32();
+        // 小さいウィンドウでも、アクション付きの行をスクロールで表示できる高さを確保する。
+        let panel_max_height = (viewport_height * 0.4)
+            .max(header_height + 72.0)
+            .min((viewport_height - 24.0).max(0.0));
+        let body_max_height = (panel_max_height - header_height - 2.0).max(0.0);
         let mut rows: Vec<gpui::AnyElement> = Vec::new();
         // Clone only the bounded window-wide history projection for this frame.
         let jobs = cx
@@ -1144,102 +1117,6 @@ impl FilerShell {
             {
                 self.operation_history_scroll.scroll_to_item(row_index);
             }
-            let title = job
-                .request
-                .sources
-                .first()
-                .and_then(|path| path.file_name())
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "Operation".into());
-            let state = match attempt.state {
-                AttemptState::Queued => "Queued",
-                AttemptState::Preparing => "Preparing…",
-                AttemptState::Running => match job.request.kind {
-                    OperationKind::Copy => "Copying…",
-                    OperationKind::Move => "Moving…",
-                    OperationKind::ExternalMoveCleanup => "Cleaning up moved files…",
-                    OperationKind::CopyStageCleanup => "Deleting retained Copy stage…",
-                    OperationKind::CreateSymbolicLink => "Creating symbolic links…",
-                    OperationKind::CreateJunction => "Creating junctions…",
-                    OperationKind::CreateFolder => "Creating folder…",
-                    OperationKind::CreateFile => "Creating file…",
-                    OperationKind::CreateShortcut => "Creating shortcut…",
-                    OperationKind::Trash if cfg!(target_os = "linux") => "Moving to Trash…",
-                    OperationKind::Trash => "Moving to Recycle Bin…",
-                    OperationKind::Rename => "Renaming…",
-                    OperationKind::BatchRename => "Renaming items…",
-                    OperationKind::BatchRenameUndo => "Undoing batch rename…",
-                    OperationKind::CreateZip => "Creating ZIP…",
-                    OperationKind::Create7z => "Creating 7z archive…",
-                    OperationKind::ExtractZip => "Extracting ZIP…",
-                    OperationKind::Extract7z => "Extracting 7z…",
-                },
-                AttemptState::WaitingConflict => "Waiting for a conflict decision…",
-                AttemptState::CancelRequested => "Cancelling…",
-                AttemptState::Terminal => {
-                    match attempt.terminal.as_ref().map(|report| report.outcome) {
-                        Some(operations::model::TerminalOutcome::Succeeded) => "Completed",
-                        Some(operations::model::TerminalOutcome::Cancelled) => "Cancelled",
-                        Some(operations::model::TerminalOutcome::Partial) => "Partially completed",
-                        Some(operations::model::TerminalOutcome::Unknown) => "Recovery required",
-                        Some(operations::model::TerminalOutcome::Failed) | None => "Failed",
-                    }
-                }
-            };
-            let state = if attempt.state == AttemptState::WaitingConflict {
-                self.translator.text(Message::ConflictWaiting).into_owned()
-            } else if attempt.state == AttemptState::Running
-                && job.request.kind == OperationKind::CreateShortcut
-            {
-                self.translator.text(Message::OperationCreatingShortcut).into_owned()
-            } else if attempt.state == AttemptState::Running
-                && job.request.kind == OperationKind::CopyStageCleanup
-            {
-                self.translator.text(Message::CopyStageCleanupRunning).into_owned()
-            } else {
-                state.to_owned()
-            };
-            let counters = attempt
-                .terminal
-                .as_ref()
-                .map(|report| report.final_counters)
-                .or_else(|| attempt.progress.as_ref().map(|progress| progress.counters));
-            let detail = counters.map_or_else(
-                || "No transfer progress reported".to_owned(),
-                |counters| {
-                    let known_bytes = counters.discovered_bytes.max(counters.processed_bytes);
-                    match counters.total_bytes {
-                        Some(total) => format!(
-                            "{} / {}",
-                            format_operation_bytes(counters.processed_bytes),
-                            format_operation_bytes(total)
-                        ),
-                        None if known_bytes > 0 => format!(
-                            "{} / {} discovered",
-                            format_operation_bytes(counters.processed_bytes),
-                            format_operation_bytes(known_bytes)
-                        ),
-                        None => format_operation_bytes(counters.processed_bytes),
-                    }
-                },
-            );
-            #[cfg(target_os = "linux")]
-            let detail = if job.request.kind == OperationKind::Trash
-                && let Some(report) = &attempt.terminal
-            {
-                let mut uncertain = report.receipts.iter().filter(|receipt| {
-                    receipt.outcome == operations::model::ItemOutcome::Unknown
-                });
-                match uncertain.next().and_then(|receipt| receipt.detail.as_deref()) {
-                    Some(first) => match uncertain.count() {
-                        0 => first.to_owned(),
-                        remaining => format!("{first} Unconfirmed receipts for {remaining} other items."),
-                    },
-                    None => detail,
-                }
-            } else {
-                detail
-            };
             let inspection_state = if job.request.kind == OperationKind::Move
                 && attempt.state == AttemptState::Terminal
             {
@@ -1349,48 +1226,30 @@ impl FilerShell {
                 div()
                     .id(("operation-history-row", index))
                     .flex()
+                    .flex_shrink_0()
                     .items_center()
-                    .gap(px(10.0))
-                    .px(px(10.0))
-                    .py(px(8.0))
+                    .gap(px(12.0))
+                    .px(px(16.0))
+                    .py(px(12.0))
                     .border_b_1()
-                    .border_color(BORDER)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .child(div().truncate().child(title))
-                            .child(
-                                div()
-                                    .text_size(px(11.0))
-                                    .text_color(TEXT_MUTED)
-                                    .child(state),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(11.0))
-                                    .text_color(TEXT_MUTED)
-                                    .child(detail),
-                            ),
-                    )
+                    .border_color(divider)
+                    .child(render_operation_history_row(
+                        &job.request,
+                        attempt,
+                        &self.translator,
+                        palette,
+                    ))
                     .when(cancellable, |row| {
                         row.child(
-                            div()
-                                .id(("operation-history-cancel", index))
+                            job_progress_button(
+                                ("operation-history-cancel", index),
+                                self.translator.text(Message::ConflictCancel).into_owned(),
+                                palette,
+                            )
                                 .debug_selector(|| "operation-history-cancel-action".to_owned())
                                 .track_focus(&cancel_focus)
                                 .focusable()
-                                .min_w(px(44.0))
-                                .h(px(44.0))
-                                .px(px(9.0))
-                                .flex()
-                                .items_center()
-                                .rounded(px(RADIUS_SM))
-                                .hover(|style| style.bg(CHROME_HOVER))
-                                .when(cancel_focus.is_focused(window), |style| style.border_1().border_color(ACCENT))
-                                .child("Cancel")
+                                .when(cancel_focus.is_focused(window), |style| style.border_color(palette.text))
                                 .on_click(cx.listener(
                                     move |this, event: &gpui::ClickEvent, _window, cx| {
                                         if event.standard_click() {
@@ -1419,24 +1278,18 @@ impl FilerShell {
                     })
                     .when(retryable, |row| {
                         row.child(
-                            div()
-                                .id(("operation-history-retry", index))
+                            job_progress_button(
+                                ("operation-history-retry", index),
+                                self.translator.text(Message::Retry).into_owned(),
+                                palette,
+                            )
                                 .track_focus(&retry_focus)
                                 .focusable()
-                                .w(px(44.0))
-                                .h(px(44.0))
-                                .px(px(9.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(RADIUS_SM))
-                                .hover(|style| style.bg(CHROME_HOVER))
-                                .when(retry_focus.is_focused(window), |style| style.border_1().border_color(ACCENT))
-                                .child(self.translator.text(Message::Retry).into_owned())
+                                .when(retry_focus.is_focused(window), |style| style.border_color(palette.text))
                                 .on_click(cx.listener(
                                     move |this, event: &gpui::ClickEvent, window, cx| {
                                         if event.standard_click() {
-                                    this.retry_operation(token, window, cx);
+                                            this.retry_operation(token, window, cx);
                                         }
                                     },
                                 ))
@@ -1457,17 +1310,21 @@ impl FilerShell {
                     })
                     .when_some(inspection_state, |row, (ticket, result)| {
                 let Some(result) = result else {
-                            return row.child(div().text_size(px(11.0)).text_color(TEXT_MUTED)
+                            return row.child(div().text_size(px(11.0)).text_color(palette.text_muted)
                                 .child(self.translator.text(Message::MoveInspectionPending).into_owned()));
                         };
                         let opened = review_open;
                         let retryable_count = verified_move_item_set.len();
                         let token = result.attempt;
-                        let review_button = div().id(("operation-move-review", index)).debug_selector(|| "operation-move-review-action".to_owned()).track_focus(&move_review_focus)
-                            .focusable().min_w(px(44.0)).h(px(44.0)).px(px(9.0)).flex().items_center()
-                            .rounded(px(RADIUS_SM)).hover(|s| s.bg(CHROME_HOVER))
-                            .when(move_review_focus.is_focused(window), |s| s.border_1().border_color(ACCENT))
-                            .child(self.translator.text(Message::MoveInspectionReview).into_owned())
+                        let review_button = job_progress_button(
+                            ("operation-move-review", index),
+                            self.translator.text(Message::MoveInspectionReview).into_owned(),
+                            palette,
+                        )
+                            .debug_selector(|| "operation-move-review-action".to_owned())
+                            .track_focus(&move_review_focus)
+                            .focusable()
+                            .when(move_review_focus.is_focused(window), |style| style.border_color(palette.text))
                             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                                 if event.standard_click() {
                                     if !this.operation_move_review_open.remove(&job.id) { this.operation_move_review_open.insert(job.id); }
@@ -1500,16 +1357,20 @@ impl FilerShell {
                             })
                         );
                         detail = detail.when(retryable_count == 0, |d| {
-                            d.child(div().text_size(px(11.0)).text_color(TEXT_MUTED)
+                            d.child(div().text_size(px(11.0)).text_color(palette.text_muted)
                                 .child(self.translator.text(Message::MoveInspectionUnavailable).into_owned()))
                         });
                         if opened && retryable_count > 0 {
                             confirmation_row = Some(div().w_full().flex().justify_end().px(px(10.0)).py(px(4.0))
-                                .child(div().id(("operation-move-retry-verified", index)).debug_selector(|| "operation-move-confirm-action".to_owned()).track_focus(&move_confirm_focus)
-                                    .focusable().min_w(px(44.0)).h(px(44.0)).px(px(9.0)).flex().items_center()
-                                    .rounded(px(RADIUS_SM)).hover(|s| s.bg(CHROME_HOVER))
-                                    .when(move_confirm_focus.is_focused(window), |s| s.border_1().border_color(ACCENT))
-                                    .child(self.translator.text(Message::MoveRetryVerified).into_owned())
+                                .child(job_progress_button(
+                                    ("operation-move-retry-verified", index),
+                                    self.translator.text(Message::MoveRetryVerified).into_owned(),
+                                    palette,
+                                )
+                                    .debug_selector(|| "operation-move-confirm-action".to_owned())
+                                    .track_focus(&move_confirm_focus)
+                                    .focusable()
+                                    .when(move_confirm_focus.is_focused(window), |style| style.border_color(palette.text))
                                     .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
                                         if event.standard_click() { this.retry_verified_move_items(token, ticket, cx); }
                                     }))
@@ -1532,28 +1393,44 @@ impl FilerShell {
                     .when_some(cross_volume_move_inspection_state, |row, (ticket, result)| {
                         let Some(result) = result else {
                             return row.child(div().debug_selector(|| "operation-cross-volume-move-inspection-pending".to_owned())
-                                .text_size(px(11.0)).text_color(TEXT_MUTED)
+                                .text_size(px(11.0)).text_color(palette.text_muted)
                                 .child(self.translator.text(Message::MoveInspectionPending).into_owned()));
                         };
                         let guards = verified_cross_volume_move_guards.as_ref().map_or(0, Vec::len);
                         let mut detail = div().w_full().flex().flex_col().gap(px(4.0)).px(px(10.0)).py(px(5.0))
-                            .text_size(px(11.0)).text_color(TEXT_MUTED)
+                            .text_size(px(11.0)).text_color(palette.text_muted)
                             .child(self.translator.text(Message::CrossVolumeMoveRetrySummary).into_owned())
-                            .child(format!("Eligible items: {guards}"));
+                            .child(format!("{}: {guards}", self.translator.text(Message::FileOperationsEligibleItems)));
                         for candidate in &result.candidates {
-                            let state = format!("{} — source {}, parent {}, destination {:?}",
+                            use operations::model::GuardedMoveDestinationState;
+
+                            let source = self.translator.text(if candidate.source_matches {
+                                Message::MoveIdentityMatches
+                            } else {
+                                Message::FileOperationsIdentityUnverified
+                            });
+                            let parent = self.translator.text(if candidate.destination_parent_matches {
+                                Message::MoveIdentityMatches
+                            } else {
+                                Message::FileOperationsIdentityUnverified
+                            });
+                            let destination = self.translator.text(match candidate.destination {
+                                GuardedMoveDestinationState::Absent => Message::MoveDestinationAbsent,
+                                GuardedMoveDestinationState::Present => Message::MoveDestinationPresent,
+                                GuardedMoveDestinationState::Indeterminate => Message::MoveDestinationIndeterminate,
+                            });
+                            let state = format!("{} · {}: {source} · {}: {parent} · {}: {destination}",
                                 candidate.proof.source.display(),
-                                if candidate.source_matches { "matches" } else { "changed/unknown" },
-                                if candidate.destination_parent_matches { "matches" } else { "changed/unknown" },
-                                candidate.destination);
+                                self.translator.text(Message::MoveSourceIdentity),
+                                self.translator.text(Message::MoveDestinationParentIdentity),
+                                self.translator.text(Message::MoveDestinationState));
                             detail = detail.child(div().child(state));
                         }
                         let token = result.attempt;
-                        let action = div().id(("operation-cross-volume-move-retry", index))
+                        let action = job_progress_button(("operation-cross-volume-move-retry", index), self.translator.text(Message::CrossVolumeMoveRetryVerified).into_owned(), palette)
                             .debug_selector(|| "operation-cross-volume-move-retry-action".to_owned())
-                            .track_focus(&move_confirm_focus).focusable().min_w(px(44.0)).h(px(44.0)).px(px(9.0))
-                            .flex().items_center().rounded(px(RADIUS_SM)).hover(|s| s.bg(CHROME_HOVER))
-                            .child(self.translator.text(Message::CrossVolumeMoveRetryVerified).into_owned())
+                            .track_focus(&move_confirm_focus).focusable()
+                            .when(move_confirm_focus.is_focused(window), |style| style.border_color(palette.text))
                             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                                 if event.standard_click() { this.retry_verified_move_items(token, ticket, cx); }
                             }))
@@ -1568,15 +1445,13 @@ impl FilerShell {
                     .when_some(published_move_inspection_state, |row, (ticket, result)| {
                         let Some(result) = result else {
                             return row.child(div().debug_selector(|| "operation-published-move-inspection-pending".to_owned())
-                                .text_size(px(11.0)).text_color(TEXT_MUTED)
+                                .text_size(px(11.0)).text_color(palette.text_muted)
                                 .child(self.translator.text(Message::MoveInspectionPending).into_owned()));
                         };
-                        let review_button = div().id(("operation-published-move-review", index))
+                        let review_button = job_progress_button(("operation-published-move-review", index), self.translator.text(Message::PublishedMoveReview).into_owned(), palette)
                             .debug_selector(|| "operation-published-move-review-action".to_owned())
-                            .track_focus(&move_review_focus).focusable().min_w(px(44.0)).h(px(44.0))
-                            .px(px(9.0)).flex().items_center().rounded(px(RADIUS_SM)).hover(|s| s.bg(CHROME_HOVER))
-                            .when(move_review_focus.is_focused(window), |s| s.border_1().border_color(ACCENT))
-                            .child(self.translator.text(Message::PublishedMoveReview).into_owned())
+                            .track_focus(&move_review_focus).focusable()
+                            .when(move_review_focus.is_focused(window), |style| style.border_color(palette.text))
                             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                                 if event.standard_click() {
                                     if !this.operation_move_review_open.remove(&job.id) { this.operation_move_review_open.insert(job.id); }
@@ -1626,20 +1501,11 @@ impl FilerShell {
                     })
                     .when(directory_move_review_available, |row| {
                         let opened = directory_move_review_open;
-                        let button = div()
-                            .id(("operation-directory-move-review", index))
+                        let button = job_progress_button(("operation-directory-move-review", index), self.translator.text(Message::DirectoryMoveReview).into_owned(), palette)
                             .debug_selector(|| "operation-directory-move-review-action".to_owned())
                             .track_focus(&move_review_focus)
                             .focusable()
-                            .min_w(px(44.0))
-                            .h(px(44.0))
-                            .px(px(9.0))
-                            .flex()
-                            .items_center()
-                            .rounded(px(RADIUS_SM))
-                            .hover(|style| style.bg(CHROME_HOVER))
-                            .when(move_review_focus.is_focused(window), |style| style.border_1().border_color(ACCENT))
-                            .child(self.translator.text(Message::DirectoryMoveReview).into_owned())
+                            .when(move_review_focus.is_focused(window), |style| style.border_color(palette.text))
                             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                                 if event.standard_click() { this.toggle_directory_move_review(token, cx); }
                             }))
@@ -1651,51 +1517,56 @@ impl FilerShell {
                             }));
                         if opened {
                             let detail = if let Some(operations::model::DirectoryMoveReviewState::Available(review)) = directory_move_review.as_ref() {
-                                let observation_message = |state| match state {
-                                    operations::model::CopyInspectionState::Matches => Message::CopyObservationMatches,
-                                    operations::model::CopyInspectionState::Changed => Message::CopyObservationChanged,
-                                    operations::model::CopyInspectionState::Absent => Message::CopyObservationAbsent,
-                                    operations::model::CopyInspectionState::Indeterminate => Message::CopyObservationIndeterminate,
-                                };
+                                let label = |message| self.translator.text(message);
+                                let no_record = label(Message::RecoveryBackupRootNotRecorded);
+                                let observe = |state| label(operation_inspection_observation(state));
                                 div()
                                     .debug_selector(|| "operation-directory-move-review-detail".to_owned())
                                     .flex().flex_col().gap(px(4.0)).px(px(6.0)).text_size(px(11.0))
-                                    .child(div().debug_selector(|| "operation-directory-move-historical-label".to_owned()).child("Historical journal facts"))
+                                    .child(div().debug_selector(|| "operation-directory-move-historical-label".to_owned())
+                                        .child(label(Message::FileOperationsHistoricalMove).into_owned()))
                                     .child(format!("{} → {}", review.source.display(), review.destination.display()))
-                                    .child(format!("Recorded root identities: source {}; destination {}", review.source_root_identity.as_deref().unwrap_or("unavailable"), review.destination_root_identity.as_deref().unwrap_or("unavailable")))
+                                    .child(format!("{}: {} · {}: {}",
+                                        label(Message::MoveSourceIdentity), review.source_root_identity.as_deref().unwrap_or(&no_record),
+                                        label(Message::FileOperationsDestinationIdentity), review.destination_root_identity.as_deref().unwrap_or(&no_record)))
                                     .child(format!("{}: {}/{}", self.translator.text(Message::DirectoryMoveChildSummary), review.children_dispositions_recorded, review.children_total))
                                     .child(format!("{}: {}", self.translator.text(Message::DirectoryMoveRootSummary), self.translator.text(if review.root_disposition_recorded { Message::DirectoryMoveRecorded } else { Message::DirectoryMoveNotRecorded })))
                                     .child(div().debug_selector(|| "operation-directory-move-cleanup-label".to_owned()).child(format!("{}: {}", self.translator.text(Message::DirectoryMoveCleanupSummary), self.translator.text(if review.cleanup_complete { Message::DirectoryMoveRecorded } else { Message::DirectoryMoveNotRecorded }))))
                                     .child(format!("{}: {}", self.translator.text(Message::DirectoryMovePendingChild), self.translator.text(if review.pending_child { Message::DirectoryMovePending } else { Message::DirectoryMoveNotPending })))
                                     .child(format!("{}: {}", self.translator.text(Message::DirectoryMovePendingRoot), self.translator.text(if review.pending_root { Message::DirectoryMovePending } else { Message::DirectoryMoveNotPending })))
                                     .child(div().debug_selector(|| "operation-directory-move-fresh-roots".to_owned())
-                                        .child("Fresh point-in-time root-only observations (children and contents not checked)"))
+                                        .child(label(Message::FileOperationsRootOnlyObservations).into_owned()))
                                     .child(div().debug_selector(|| "operation-directory-move-fresh-source-root".to_owned())
-                                        .child(format!("Fresh source root: {}", self.translator.text(observation_message(review.source_root_observation)))))
+                                        .child(format!("{}: {}", label(Message::RecoverySourceRootNow), observe(review.source_root_observation))))
                                     .child(div().debug_selector(|| "operation-directory-move-fresh-destination-root".to_owned())
-                                        .child(format!("Fresh destination root: {}", self.translator.text(observation_message(review.destination_root_observation)))))
+                                        .child(format!("{}: {}", label(Message::RecoveryDestinationRootNow), observe(review.destination_root_observation))))
                                     .when_some(review.replace.as_ref(), |detail, replace| detail
-                                        .child(div().debug_selector(|| "operation-directory-move-replace-historical-label".to_owned()).child("Historical Replace journal facts"))
-                                        .child(format!("Recorded Replace phase: {:?}", replace.phase))
-                                        .child(format!("Stage: {}; backup: {}", replace.stage.display(), replace.backup.display()))
-                                        .child(format!("Incoming stage identity: {}; displaced target identity: {}", replace.stage_identity.as_deref().unwrap_or("unavailable"), replace.displaced_identity.as_deref().unwrap_or("unavailable")))
-                                        .child(format!("Recorded backup root disposition: {}", self.translator.text(if replace.backup_root_disposition_recorded { Message::DirectoryMoveRecorded } else { Message::DirectoryMoveNotRecorded })))
-                                        .child(format!("Recorded backup cleanup: {}", self.translator.text(if replace.backup_cleanup_complete { Message::DirectoryMoveRecorded } else { Message::DirectoryMoveNotRecorded })))
+                                        .child(div().debug_selector(|| "operation-directory-move-replace-historical-label".to_owned())
+                                            .child(label(Message::FileOperationsHistoricalReplace).into_owned()))
+                                        .child(format!("{}: {:?}", label(Message::RecoveryMovePhase), replace.phase))
+                                        .child(format!("{}: {} · {}: {}",
+                                            label(Message::RecoveryMoveStagePath), replace.stage.display(),
+                                            label(Message::RecoveryBackupPath), replace.backup.display()))
+                                        .child(format!("{}: {} · {}: {}",
+                                            label(Message::FileOperationsStageIdentity), replace.stage_identity.as_deref().unwrap_or(&no_record),
+                                            label(Message::FileOperationsDisplacedIdentity), replace.displaced_identity.as_deref().unwrap_or(&no_record)))
+                                        .child(format!("{}: {}", label(Message::RecoveryBackupRootDisposal), label(if replace.backup_root_disposition_recorded { Message::DirectoryMoveRecorded } else { Message::DirectoryMoveNotRecorded })))
+                                        .child(format!("{}: {}", label(Message::FileOperationsBackupCleanup), label(if replace.backup_cleanup_complete { Message::DirectoryMoveRecorded } else { Message::DirectoryMoveNotRecorded })))
                                         .child(div().debug_selector(|| "operation-directory-move-replace-backup-children-historical".to_owned())
-                                            .child(format!("Historical backup child receipts: {}/{}", replace.backup_children_dispositions_recorded, replace.backup_children_total)))
+                                            .child(format!("{}: {}/{}", label(Message::FileOperationsBackupChildReceipts), replace.backup_children_dispositions_recorded, replace.backup_children_total)))
                                         .child(div().debug_selector(|| "operation-directory-move-replace-pending-backup-historical".to_owned())
-                                            .child(format!("Historical pending backup intent: {}", self.translator.text(if replace.pending_backup_intent { Message::DirectoryMovePending } else { Message::DirectoryMoveNotPending }))))
+                                            .child(format!("{}: {}", label(Message::FileOperationsPendingBackupIntent), label(if replace.pending_backup_intent { Message::DirectoryMovePending } else { Message::DirectoryMoveNotPending }))))
                                         .child(div().debug_selector(|| "operation-directory-move-fresh-stage-root".to_owned())
-                                            .child(format!("Fresh stage root: {}", self.translator.text(observation_message(review.stage_root_observation)))))
+                                            .child(format!("{}: {}", label(Message::FileOperationsStageRootNow), observe(review.stage_root_observation))))
                                         .child(div().debug_selector(|| "operation-directory-move-fresh-backup-root".to_owned())
-                                            .child(format!("Fresh backup root: {}", self.translator.text(observation_message(review.backup_root_observation))))))
+                                            .child(format!("{}: {}", label(Message::FileOperationsBackupRootNow), observe(review.backup_root_observation)))))
                             } else if matches!(directory_move_review, Some(operations::model::DirectoryMoveReviewState::Unavailable)) {
                                 div().debug_selector(|| "operation-directory-move-review-unavailable".to_owned())
-                                    .text_size(px(11.0)).text_color(TEXT_MUTED)
+                                    .text_size(px(11.0)).text_color(palette.text_muted)
                                     .child(self.translator.text(Message::DirectoryMoveUnavailable).into_owned())
                             } else {
                                 div().debug_selector(|| "operation-directory-move-review-pending".to_owned())
-                                    .text_size(px(11.0)).text_color(TEXT_MUTED)
+                                    .text_size(px(11.0)).text_color(palette.text_muted)
                                     .child(self.translator.text(Message::MoveInspectionPending).into_owned())
                             };
                             expanded_detail = Some(detail.into_any_element());
@@ -1708,7 +1579,7 @@ impl FilerShell {
                                 div()
                                     .debug_selector(|| "operation-copy-inspection-pending".to_owned())
                                     .text_size(px(11.0))
-                                    .text_color(TEXT_MUTED)
+                                    .text_color(palette.text_muted)
                                     .child(self.translator.text(Message::CopyInspectionPending).into_owned()),
                             );
                         };
@@ -1718,22 +1589,15 @@ impl FilerShell {
                         let Some(focus) = copy_review_focus.as_ref() else {
                             return row;
                         };
-                        let review = div()
-                            .id(("operation-copy-review", index))
+                        let review = job_progress_button(
+                            ("operation-copy-review", index),
+                            self.translator.text(Message::CopyInspectionReview).into_owned(),
+                            palette,
+                        )
                             .debug_selector(|| "operation-copy-review-action".to_owned())
                             .track_focus(focus)
                             .focusable()
-                            .min_w(px(44.0))
-                            .h(px(44.0))
-                            .px(px(9.0))
-                            .flex()
-                            .items_center()
-                            .rounded(px(RADIUS_SM))
-                            .hover(|style| style.bg(CHROME_HOVER))
-                            .when(focus.is_focused(window), |style| {
-                                style.border_1().border_color(ACCENT)
-                            })
-                            .child(self.translator.text(Message::CopyInspectionReview).into_owned())
+                            .when(focus.is_focused(window), |style| style.border_color(palette.text))
                             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                                 if event.standard_click() {
                                     this.toggle_copy_failure_review(
@@ -1756,7 +1620,7 @@ impl FilerShell {
                                 div()
                                     .id(("operation-copy-inspection-detail", index))
                                     .debug_selector(|| "operation-copy-inspection-detail".to_owned())
-                                    .max_h(px(240.0))
+                                    .max_h(px(body_max_height.min(240.0)))
                                     .overflow_y_scroll()
                                     .track_scroll(copy_review_scroll.as_ref().unwrap())
                                     .flex()
@@ -1791,12 +1655,7 @@ impl FilerShell {
                                             .entry(cleanup_key)
                                             .or_insert_with(gpui::ScrollHandle::new)
                                             .clone();
-                                        let observation = |state| self.translator.text(match state {
-                                            State::Matches => Message::CopyObservationMatches,
-                                            State::Changed => Message::CopyObservationChanged,
-                                            State::Absent => Message::CopyObservationAbsent,
-                                            State::Indeterminate => Message::CopyObservationIndeterminate,
-                                        }).into_owned();
+                                        let observation = |state| self.translator.text(operation_inspection_observation(state));
                                         let cleanup_eligible = verified_copy_cleanup_item_set.contains(&candidate_item);
                                         let mut details = div()
                                             .id(("operation-copy-cleanup-candidate", candidate_item.0))
@@ -1873,19 +1732,15 @@ impl FilerShell {
                                             let cleanup_ticket = ticket;
                                             let cleanup_item = candidate_item;
                                             details = details.child(
-                                                div()
-                                                    .id(("operation-copy-cleanup", candidate.provenance.item.0))
+                                                job_progress_button(
+                                                    ("operation-copy-cleanup", candidate_item.0),
+                                                    self.translator.text(Message::CopyInspectionDeleteStage).into_owned(),
+                                                    palette,
+                                                )
                                                     .debug_selector(move || format!("operation-copy-cleanup-action-{}", cleanup_item.0))
                                                     .track_focus(&cleanup_focus)
                                                     .focusable()
-                                                    .min_h(px(44.0))
-                                                    .px(px(9.0))
-                                                    .flex()
-                                                    .items_center()
-                                                    .rounded(px(RADIUS_SM))
-                                                    .hover(|style| style.bg(CHROME_HOVER))
-                                                    .when(cleanup_focus.is_focused(window), |style| style.border_1().border_color(ACCENT))
-                                                    .child(self.translator.text(Message::CopyInspectionDeleteStage).into_owned())
+                                                    .when(cleanup_focus.is_focused(window), |style| style.border_color(palette.text))
                                                     .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                                                         if event.standard_click() {
                                                             this.cleanup_verified_copy_stage(cleanup_token, cleanup_ticket, cleanup_item, cx);
@@ -1940,52 +1795,59 @@ impl FilerShell {
                                     }))
                                     .children(result.directory_candidates.iter().map(|candidate| {
                                         use operations::model::CopyDirectoryInspectionEvidence as Evidence;
-                                        let (stage, destination, history) = match &candidate.evidence {
+
+                                        let label = |message| self.translator.text(message);
+                                        let no_record = label(Message::RecoveryBackupRootNotRecorded);
+                                        let observe = |state| label(operation_inspection_observation(state));
+                                        let (stage, destination, facts) = match &candidate.evidence {
                                             Evidence::Publication(e) => (
                                                 String::from_utf16_lossy(&e.stage_path_units),
                                                 String::from_utf16_lossy(&e.destination_path_units),
-                                                format!("Recorded publication phase: {:?}; detail: {}; expected root identity: {}; expected node count: {}; expected tree commitment: {}; recorded post-publication root: {:?}; nodes: {:?}; commitment: {:?}", e.phase, e.detail, e.expected_root_identity, e.expected_node_count, e.expected_inventory_sha256, e.observed_root_identity, e.observed_node_count, e.observed_inventory_sha256),
+                                                vec![
+                                                    format!("{}: {:?}", label(Message::FileOperationsRecordedPublicationPhase), e.phase),
+                                                    format!("{}: {}", label(Message::FileOperationsReason), e.detail),
+                                                    format!("{}: {}", label(Message::FileOperationsExpectedRootIdentity), e.expected_root_identity),
+                                                    format!("{}: {}", label(Message::FileOperationsExpectedNodeCount), e.expected_node_count),
+                                                    format!("{}: {}", label(Message::FileOperationsExpectedTreeCommitment), e.expected_inventory_sha256),
+                                                    format!("{}: {}", label(Message::FileOperationsPublishedRootIdentity), e.observed_root_identity.as_deref().unwrap_or(&no_record)),
+                                                    format!("{}: {}", label(Message::FileOperationsPublishedNodeCount), e.observed_node_count.map_or_else(|| no_record.to_string(), |count| count.to_string())),
+                                                    format!("{}: {}", label(Message::FileOperationsPublishedTreeCommitment), e.observed_inventory_sha256.as_deref().unwrap_or(&no_record)),
+                                                ],
                                             ),
                                             Evidence::RetainedStage(e) => (
                                                 String::from_utf16_lossy(&e.stage_path_units),
                                                 String::from_utf16_lossy(&e.destination_path_units),
-                                                format!("Recorded stage phase: {:?}; detail: {}; creation-time root identity: {}", e.phase, e.detail, e.expected_root_identity),
+                                                vec![
+                                                    format!("{}: {:?}", label(Message::FileOperationsRecordedStagePhase), e.phase),
+                                                    format!("{}: {}", label(Message::FileOperationsReason), e.detail),
+                                                    format!("{}: {}", label(Message::FileOperationsCreationRootIdentity), e.expected_root_identity),
+                                                ],
                                             ),
                                         };
                                         div().debug_selector(|| "operation-copy-directory-evidence".to_owned())
                                             .flex().flex_col().gap(px(2.0)).min_w_0().whitespace_normal()
-                                            .text_size(px(11.0)).text_color(TEXT_MUTED)
-                                            .child(history)
-                                            .child(format!("Recorded stage path: {stage}"))
-                                            .child(format!("Recorded destination path: {destination}"))
-                                            .child(format!("Fresh stage root observation: {:?}", candidate.stage_root))
-                                            .child(format!("Fresh destination root observation: {:?}", candidate.destination_root))
-                                            .child("A matching root identity does not establish child inventory or content stability.")
+                                            .text_size(px(11.0)).text_color(palette.text_muted)
+                                            .children(facts.into_iter().map(|fact| div().child(fact)))
+                                            .child(format!("{}: {stage}", label(Message::FileOperationsRecordedStagePath)))
+                                            .child(format!("{}: {destination}", label(Message::RecoveryRecordedDestination)))
+                                            .child(format!("{}: {}", label(Message::FileOperationsStageRootNow), observe(candidate.stage_root)))
+                                            .child(format!("{}: {}", label(Message::RecoveryDestinationRootNow), observe(candidate.destination_root)))
+                                            .child(label(Message::FileOperationsRootMatchCaveat).into_owned())
                                     }));
                             if copy_retry_visible {
                                 let retry_focus = copy_retry_focus.as_ref().unwrap().clone();
                                 let retry_token = token;
                                 let retry_ticket = ticket;
                                 details = details.child(
-                                    div()
-                                        .id(("operation-copy-retry", index))
+                                    job_progress_button(
+                                        ("operation-copy-retry", index),
+                                        self.translator.text(Message::CopyInspectionRetry).into_owned(),
+                                        palette,
+                                    )
                                         .debug_selector(|| "operation-copy-retry-action".to_owned())
                                         .track_focus(&retry_focus)
                                         .focusable()
-                                        .min_h(px(44.0))
-                                        .px(px(9.0))
-                                        .flex()
-                                        .items_center()
-                                        .rounded(px(RADIUS_SM))
-                                        .hover(|style| style.bg(CHROME_HOVER))
-                                        .when(retry_focus.is_focused(window), |style| {
-                                            style.border_1().border_color(ACCENT)
-                                        })
-                                        .child(
-                                            self.translator
-                                                .text(Message::CopyInspectionRetry)
-                                                .into_owned(),
-                                        )
+                                        .when(retry_focus.is_focused(window), |style| style.border_color(palette.text))
                                         .on_click(cx.listener(
                                             move |this, event: &gpui::ClickEvent, _, cx| {
                                                 if event.standard_click() {
@@ -2032,8 +1894,6 @@ impl FilerShell {
                 rows.push(confirmation);
             }
         }
-        let panel_max_height = (window.viewport_size().height.as_f32() - 24.0).clamp(44.0, 520.0);
-        let body_max_height = (panel_max_height - 44.0).max(0.0);
         Some(
             div()
                 .id("operation-history")
@@ -2042,45 +1902,46 @@ impl FilerShell {
                 .left(px(12.0))
                 .right(px(12.0))
                 .bottom(px(12.0))
-                .max_h(px(520.0))
+                .max_h(px(panel_max_height))
                 .rounded(px(RADIUS_MD))
                 .border_1()
-                .border_color(BORDER)
-                .bg(SURFACE_RAISED)
-                .text_color(TEXT)
+                .border_color(palette.text.opacity(0.16))
+                .bg(palette.surface_raised)
+                .text_color(palette.text)
+                .shadow_lg()
                 .occlude()
                 .overflow_hidden()
                 .flex()
                 .flex_col()
                 .child(
                     div()
-                        .h(px(44.0))
-                        .px(px(12.0))
+                        .h(px(header_height))
+                        .px(px(16.0))
                         .flex_shrink_0()
                         .flex()
                         .items_center()
                         .justify_between()
                         .border_b_1()
-                        .border_color(BORDER)
-                        .child("File operations")
+                        .border_color(divider)
                         .child(
                             div()
-                                .id("operation-history-close")
+                                .text_size(px(14.0))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child(self.translator.text(Message::FileOperationsTitle).into_owned()),
+                        )
+                        .child(
+                            job_progress_button(
+                                "operation-history-close",
+                                self.translator.text(Message::JobProgressClose).into_owned(),
+                                palette,
+                            )
                                 .debug_selector(|| "operation-history-close-action".to_owned())
                                 .track_focus(&self.operation_history_close_focus)
                                 .focusable()
-                                .min_w(px(44.0))
-                                .h(px(44.0))
-                                .px(px(9.0))
-                                .flex()
-                                .items_center()
-                                .rounded(px(RADIUS_SM))
-                                .hover(|style| style.bg(CHROME_HOVER))
                                 .when(
                                     self.operation_history_close_focus.is_focused(window),
-                                    |style| style.border_1().border_color(ACCENT),
+                                    |style| style.border_color(palette.text),
                                 )
-                                .child("Close")
                                 .on_click(cx.listener(
                                     |this, event: &gpui::ClickEvent, window, cx| {
                                         if event.standard_click() {
@@ -2107,7 +1968,6 @@ impl FilerShell {
                                 )),
                         ),
                 )
-                .max_h(px(panel_max_height))
                 .child(
                     div()
                         .id("operation-history-rows")
@@ -2121,6 +1981,463 @@ impl FilerShell {
                 )
                 .into_any_element(),
         )
+    }
+}
+
+fn job_progress_button(
+    id: impl Into<gpui::ElementId>,
+    label: String,
+    palette: gpui_filer_ui::ThemePalette,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .min_w(px(44.0))
+        .h(px(44.0))
+        .px(px(6.0))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(RADIUS_SM))
+        .border_1()
+        .border_color(gpui::transparent_black())
+        .cursor_pointer()
+        .text_size(px(12.0))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_color(palette.text)
+        .hover(|style| style.bg(palette.chrome_hover))
+        .focus_visible(|style| style.border_color(palette.text))
+        .child(label)
+}
+
+fn job_progress_kind(kind: OperationKind) -> Message {
+    match kind {
+        OperationKind::Copy => Message::RecoveryKindCopy,
+        OperationKind::Move => Message::RecoveryKindMove,
+        OperationKind::CreateSymbolicLink => Message::RecoveryKindSymbolicLink,
+        OperationKind::CreateJunction => Message::RecoveryKindJunction,
+        OperationKind::CreateFolder => Message::RecoveryKindNewFolder,
+        OperationKind::CreateFile => Message::RecoveryKindNewFile,
+        OperationKind::CreateShortcut => Message::RecoveryKindCreateShortcut,
+        OperationKind::CreateZip => Message::RecoveryKindCreateZip,
+        OperationKind::Create7z => Message::RecoveryKindCreate7z,
+        OperationKind::ExtractZip => Message::RecoveryKindExtractZip,
+        OperationKind::Extract7z => Message::JobProgressExtract7z,
+        OperationKind::Trash => Message::RecoveryKindTrash,
+        OperationKind::Rename => Message::RecoveryKindRename,
+        OperationKind::BatchRename => Message::RecoveryKindBatchRename,
+        OperationKind::BatchRenameUndo => Message::RecoveryKindBatchRenameUndo,
+        OperationKind::ExternalMoveCleanup => Message::JobProgressExternalMoveCleanup,
+        OperationKind::CopyStageCleanup => Message::JobProgressCopyStageCleanup,
+    }
+}
+
+fn operation_inspection_observation(state: operations::model::CopyInspectionState) -> Message {
+    use operations::model::CopyInspectionState;
+
+    match state {
+        CopyInspectionState::Matches => Message::CopyObservationMatches,
+        CopyInspectionState::Changed => Message::CopyObservationChanged,
+        CopyInspectionState::Absent => Message::CopyObservationAbsent,
+        CopyInspectionState::Indeterminate => Message::CopyObservationIndeterminate,
+    }
+}
+
+fn render_job_progress_row_label(
+    row: &operations::model::ProgressRowSnapshot,
+    translator: &Translator,
+    palette: gpui_filer_ui::ThemePalette,
+    cx: &gpui::App,
+) -> gpui::Div {
+    use operations::model::{AttemptState, TerminalOutcome};
+
+    let kind = job_progress_kind(row.kind);
+    let (status, marker) = match row.terminal_outcome {
+        Some(TerminalOutcome::Failed) => (Message::RecoveryOutcomeFailed, palette.error_text),
+        Some(TerminalOutcome::Partial) => (Message::RecoveryOutcomePartial, palette.warning_text),
+        Some(TerminalOutcome::Unknown) => (Message::RecoveryOutcomeUnknown, palette.warning_text),
+        Some(TerminalOutcome::Succeeded) => (Message::RecoveryOutcomeSucceeded, palette.text_muted),
+        Some(TerminalOutcome::Cancelled) => (Message::RecoveryOutcomeCancelled, palette.text_muted),
+        None => match row.state {
+            AttemptState::Queued => (Message::JobProgressQueued, palette.accent_hover),
+            AttemptState::Preparing => (Message::JobProgressPreparing, palette.accent_hover),
+            AttemptState::Running => (Message::JobProgressRunning, palette.accent_hover),
+            AttemptState::WaitingConflict => {
+                (Message::JobProgressWaitingConflict, palette.warning_text)
+            }
+            AttemptState::CancelRequested => {
+                (Message::JobProgressCancelRequested, palette.accent_hover)
+            }
+            AttemptState::Terminal => (Message::RecoveryOutcomeUnknown, palette.warning_text),
+        },
+    };
+    let progress = match row.terminal_outcome {
+        Some(TerminalOutcome::Failed | TerminalOutcome::Partial | TerminalOutcome::Unknown) => cx
+            .global::<operations::application::OperationApplicationOwner>()
+            .runtime
+            .current_terminal_receipts(row.token)
+            .and_then(|receipts| operation_history_failure(receipts, translator))
+            .map(|(_, reason)| reason),
+        Some(TerminalOutcome::Succeeded) => {
+            Some(translator.text(Message::FileOperationsCompleted).into_owned())
+        }
+        Some(TerminalOutcome::Cancelled) => {
+            Some(translator.text(Message::FileOperationsCancelled).into_owned())
+        }
+        None => row.counters.map(|counters| {
+            translator.job_progress_counters(
+                counters.processed_items,
+                &format_operation_bytes(counters.processed_bytes),
+            )
+        }).or_else(|| match row.state {
+            AttemptState::Queued | AttemptState::Preparing => {
+                Some(translator.text(Message::JobProgressWaiting).into_owned())
+            }
+            AttemptState::Running => Some(format!("{}…", translator.text(status))),
+            _ => None,
+        }),
+    };
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .items_start()
+        .gap(px(6.0))
+        .text_size(px(12.0))
+        .child(
+            div()
+                .mt(px(5.0))
+                .size(px(7.0))
+                .flex_shrink_0()
+                .rounded_full()
+                .bg(marker),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(format!("{} · {}", translator.text(kind), translator.text(status)))
+                .children(progress.map(|text| div().text_color(palette.text_muted).child(text))),
+        )
+}
+
+fn render_operation_history_row(
+    request: &OperationRequest,
+    attempt: &operations::model::AttemptSnapshot,
+    translator: &Translator,
+    palette: gpui_filer_ui::ThemePalette,
+) -> gpui::Div {
+    use operations::model::TerminalOutcome;
+
+    let failure = attempt
+        .terminal
+        .as_ref()
+        .and_then(|report| operation_history_failure(&report.receipts, translator));
+    let item = failure.as_ref().map(|(item, _)| *item);
+    let kind = translator.text(match request.kind {
+        OperationKind::Rename => Message::FileOperationsRename,
+        kind => job_progress_kind(kind),
+    });
+    let title = operation_history_item_name(request, attempt, item)
+        .map_or_else(|| kind.to_string(), |name| format!("{kind}: {name}"));
+    let (status, icon, color) = match attempt.state {
+        AttemptState::Terminal => match attempt.terminal.as_ref().map(|report| report.outcome) {
+            Some(TerminalOutcome::Succeeded) => (
+                Message::FileOperationsCompleted,
+                IconId::OperationCompleted,
+                palette.text_muted,
+            ),
+            Some(TerminalOutcome::Cancelled) => (
+                Message::FileOperationsCancelled,
+                IconId::OperationCancelled,
+                palette.text_muted,
+            ),
+            Some(TerminalOutcome::Partial) => (
+                Message::RecoveryOutcomePartial,
+                IconId::Warning,
+                palette.warning_text,
+            ),
+            Some(TerminalOutcome::Failed) => (
+                Message::RecoveryOutcomeFailed,
+                IconId::OperationFailed,
+                palette.error_text,
+            ),
+            Some(TerminalOutcome::Unknown) | None => (
+                Message::FileOperationsRecoveryRequired,
+                IconId::Warning,
+                palette.warning_text,
+            ),
+        },
+        AttemptState::WaitingConflict => (
+            Message::JobProgressWaitingConflict,
+            IconId::Warning,
+            palette.warning_text,
+        ),
+        state => (
+            match state {
+                AttemptState::Queued => Message::JobProgressQueued,
+                AttemptState::Preparing => Message::JobProgressPreparing,
+                AttemptState::CancelRequested => Message::JobProgressCancelRequested,
+                _ => Message::JobProgressRunning,
+            },
+            IconId::OperationInProgress,
+            palette.accent_hover,
+        ),
+    };
+    let status = translator.text(status);
+    let secondary = failure.map_or_else(
+        || status.to_string(),
+        |(_, reason)| format!("{status} · {reason}"),
+    );
+    let counters = attempt
+        .terminal
+        .as_ref()
+        .map(|report| report.final_counters)
+        .or_else(|| attempt.progress.as_ref().map(|progress| progress.counters));
+
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .items_start()
+        .gap(px(10.0))
+        .child(
+            div()
+                .mt(px(2.0))
+                .flex_shrink_0()
+                .child(Icon::new(icon).color(color.into())),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .truncate()
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(palette.text_muted)
+                        .line_clamp(2)
+                        .child(secondary),
+                ),
+        )
+        .when_some(
+            counters
+                .and_then(|counters| operation_history_bytes(request.kind, counters, translator)),
+            |row, bytes| {
+                row.child(
+                    div()
+                        .flex_shrink_0()
+                        .self_center()
+                        .text_size(px(12.0))
+                        .text_color(palette.text_muted)
+                        .child(bytes),
+                )
+            },
+        )
+}
+
+fn operation_history_item_name<'a>(
+    request: &'a OperationRequest,
+    attempt: &'a operations::model::AttemptSnapshot,
+    failed_item: Option<operations::model::ItemId>,
+) -> Option<Cow<'a, str>> {
+    use operations::model::ItemOutcome;
+
+    if matches!(
+        request.kind,
+        OperationKind::CreateFile | OperationKind::CreateFolder
+    ) {
+        let receipt = attempt
+            .terminal
+            .as_ref()?
+            .receipts
+            .iter()
+            .find(|receipt| receipt.outcome == ItemOutcome::Completed)?;
+        return match request.kind {
+            OperationKind::CreateFile => receipt.detail.as_deref().map(Cow::Borrowed),
+            _ => receipt
+                .created_folder_path
+                .as_deref()?
+                .file_name()
+                .map(|name| name.to_string_lossy()),
+        };
+    }
+    let index = failed_item.map_or(0, |item| item.0 as usize);
+    if let Some(source) = request
+        .sources
+        .get(index)
+        .or_else(|| request.sources.first())
+    {
+        return Some(
+            source
+                .file_name()
+                .unwrap_or(source.as_os_str())
+                .to_string_lossy(),
+        );
+    }
+    let items = &request.virtual_source.as_ref()?.items;
+    items
+        .get(index)
+        .or_else(|| items.first())
+        .map(|item| Cow::Borrowed(item.name.as_str()))
+}
+
+fn operation_history_failure(
+    receipts: &[operations::model::ItemReceipt],
+    translator: &Translator,
+) -> Option<(operations::model::ItemId, String)> {
+    use operations::model::{
+        DIRECTORY_COPY_EVIDENCE_PREFIX, DIRECTORY_COPY_STAGE_EVIDENCE_PREFIX, ItemOutcome,
+    };
+
+    let issues = receipts.iter().filter(|receipt| {
+        matches!(
+            receipt.outcome,
+            ItemOutcome::Failed | ItemOutcome::Partial | ItemOutcome::Unknown
+        )
+    });
+    let (item, detail) = issues.clone().find_map(|receipt| {
+        receipt
+            .detail
+            .as_deref()
+            .map(str::trim)
+            .filter(|detail| !detail.is_empty())
+            .map(|detail| (receipt.item, detail))
+    })?;
+    let reason = match detail {
+        "DestinationExists"
+        | "Io(\"DestinationExists\")"
+        | "output already exists"
+        | "output folder already exists" => translator.text(Message::ConflictHeading),
+        "AccessDenied" => translator.text(Message::FileOperationsAccessDenied),
+        "Unsupported" => translator.text(Message::FileOperationsUnsupported),
+        _ => {
+            // 記録の JSON は検査用。行には実行結果の説明だけを表示する。
+            let detail = [
+                DIRECTORY_COPY_EVIDENCE_PREFIX,
+                DIRECTORY_COPY_STAGE_EVIDENCE_PREFIX,
+            ]
+            .into_iter()
+            .find_map(|prefix| {
+                detail
+                    .split_once(prefix)
+                    .map(|(summary, _)| summary.trim_end_matches("; "))
+            })
+            .unwrap_or(detail);
+            Cow::Borrowed(detail)
+        }
+    };
+    let remaining = issues.count() - 1;
+    let reason = if remaining > 0 {
+        format!(
+            "{reason} · {}",
+            translator.other_operation_issues(remaining)
+        )
+    } else {
+        reason.into_owned()
+    };
+    Some((item, reason))
+}
+
+fn operation_history_bytes(
+    kind: OperationKind,
+    counters: operations::model::ProgressCounters,
+    translator: &Translator,
+) -> Option<String> {
+    if !matches!(
+        kind,
+        OperationKind::Copy
+            | OperationKind::Move
+            | OperationKind::Trash
+            | OperationKind::ExtractZip
+            | OperationKind::Extract7z
+    ) {
+        return None;
+    }
+    let processed = format_operation_bytes(counters.processed_bytes);
+    if let Some(total) = counters.total_bytes {
+        return Some(format!("{processed} / {}", format_operation_bytes(total)));
+    }
+    let known_bytes = counters.discovered_bytes.max(counters.processed_bytes);
+    (known_bytes > 0).then(|| {
+        format!(
+            "{processed} / {} {}",
+            format_operation_bytes(known_bytes),
+            translator.text(Message::FileOperationsDiscovered)
+        )
+    })
+}
+
+#[cfg(test)]
+mod operation_history_tests {
+    use super::*;
+    use crate::operations::model::{ItemId, ItemOutcome, ItemReceipt, ProgressCounters};
+    use crate::shell::i18n::Locale;
+
+    #[test]
+    fn reports_the_localized_rename_collision_from_the_terminal_receipt() {
+        let receipt = ItemReceipt {
+            item: ItemId(0),
+            outcome: ItemOutcome::Failed,
+            detail: Some("DestinationExists".to_owned()),
+            created_folder_path: None,
+            created_archive_path: None,
+            move_receipt: None,
+            replace_receipt: None,
+            copy_undo: None,
+        };
+        let ja = Translator::new(Locale::Japanese);
+        assert_eq!(
+            operation_history_failure(&[receipt], &ja),
+            Some((ItemId(0), "同じ名前の項目が既にあります".to_owned())),
+        );
+    }
+
+    #[test]
+    fn only_measured_transfer_operations_show_bytes() {
+        let ja = Translator::new(Locale::Japanese);
+        let measured = ProgressCounters {
+            processed_bytes: 10,
+            discovered_bytes: 20,
+            ..Default::default()
+        };
+        for kind in [
+            OperationKind::Rename,
+            OperationKind::CreateFile,
+            OperationKind::CreateFolder,
+        ] {
+            assert_eq!(operation_history_bytes(kind, measured, &ja), None);
+        }
+        assert_eq!(
+            operation_history_bytes(OperationKind::Trash, ProgressCounters::default(), &ja),
+            None
+        );
+        assert_eq!(
+            operation_history_bytes(OperationKind::Copy, measured, &ja).as_deref(),
+            Some("10 B / 20 B 検出済み"),
+        );
+        assert_eq!(
+            operation_history_bytes(
+                OperationKind::ExtractZip,
+                ProgressCounters {
+                    total_bytes: Some(30),
+                    ..measured
+                },
+                &ja
+            )
+            .as_deref(),
+            Some("10 B / 30 B"),
+        );
     }
 }
 

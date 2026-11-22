@@ -93,6 +93,8 @@ pub struct ThemePalette {
     pub accent: Rgba,
     pub accent_hover: Rgba,
     pub on_accent: Rgba,
+    /// 選択タブでは `on_accent` の小さい文字も読める背景色を使う。
+    pub tab_accent: Rgba,
     pub surface_base: Rgba,
     pub surface_raised: Rgba,
     pub surface_bar: Rgba,
@@ -107,6 +109,7 @@ pub struct ThemePalette {
     pub scrollbar_thumb: Rgba,
     pub scrollbar_thumb_hover: Rgba,
     pub warning_text: Rgba,
+    pub error_text: Rgba,
 }
 
 impl Default for ThemePalette {
@@ -120,6 +123,7 @@ impl Default for ThemePalette {
             accent: ACCENT,
             accent_hover: ACCENT_HOVER,
             on_accent: ON_ACCENT,
+            tab_accent: ACCENT,
             surface_base: SURFACE_BASE,
             surface_raised: SURFACE_RAISED,
             surface_bar: SURFACE_BAR,
@@ -134,6 +138,7 @@ impl Default for ThemePalette {
             scrollbar_thumb: SCROLLBAR_THUMB,
             scrollbar_thumb_hover: SCROLLBAR_THUMB_HOVER,
             warning_text: hex(0xd2b585),
+            error_text: hex(0xff7676),
         }
     }
 }

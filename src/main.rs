@@ -14,8 +14,8 @@ use gpui_filer_input::{
 };
 use gpui_filer_resources::{IconId, ResourceAssets};
 use gpui_filer_ui::{
-    ACCENT, BORDER, Icon, RADIUS_MD, RADIUS_SM, SCROLLBAR_THUMB, SCROLLBAR_THUMB_HOVER,
-    SURFACE_BASE, SURFACE_RAISED, SelectionCheckbox, TEXT, TEXT_MUTED,
+    ACCENT, Icon, RADIUS_MD, RADIUS_SM, SCROLLBAR_THUMB, SCROLLBAR_THUMB_HOVER, SURFACE_BASE,
+    SURFACE_RAISED, SelectionCheckbox, TEXT, TEXT_MUTED,
 };
 use gpui_filer_virtual_list::RowHeights;
 use location::{Location, ShellRoot};
@@ -49,9 +49,10 @@ const NAME_FONT_SIZE: f32 = 12.0;
 const NAME_LINE_HEIGHT: f32 = 18.0;
 /// toolbar と menu の文字。chrome の文字は揃える。
 const CHROME_FONT_SIZE: f32 = 12.0;
-/// checkboxの箱を隣の内容へ寄せたときの間隔。
-/// `ViewLayout::columns` の最小幅は `CHECKBOX_HIT_SIZE * 2 + CHECKBOX_GAP * 2 + 16` を前提にする。
-const CHECKBOX_GAP: f32 = 4.0;
+const TILE_ITEM_GAP: f32 = 8.0;
+const GRID_NAME_PADDING_X: f32 = 6.0;
+const ICON_NAME_GAP: f32 = 2.0;
+const ICON_CHECKBOX_OVERHANG: f32 = 12.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ItemCheckBoxes(pub bool);
@@ -312,25 +313,28 @@ impl ViewLayout {
 
     /// アイコンを囲む余白込みのコンテナサイズ。
     fn icon_container(self, scale: f32) -> f32 {
-        self.icon_size(scale) + 16.0
+        self.icon_size(scale) + if self == Self::Icons { 8.0 } else { 16.0 }
+    }
+
+    fn tile_name_offset(self, icon_scale: f32, item_check_boxes: bool) -> f32 {
+        let checkbox = if item_check_boxes {
+            gpui_filer_ui::CHECKBOX_HIT_SIZE + TILE_ITEM_GAP
+        } else {
+            0.0
+        };
+        self.icon_container(icon_scale) + TILE_ITEM_GAP + checkbox
     }
 
     fn columns(self, width: f32, icon_scale: f32, item_check_boxes: bool) -> usize {
         let minimum = match self {
             Self::Rows => return 1,
-            // 非アイコン部(checkbox, gap, padding, name最小幅)は固定。
             Self::Tiles => {
-                self.icon_size(icon_scale) + if item_check_boxes { 216.0 } else { 164.0 }
+                self.tile_name_offset(icon_scale, item_check_boxes)
+                    + GRID_NAME_PADDING_X * 2.0
+                    + 80.0
             }
-            // icon の両脇に checkbox と同幅の空きを置く。
             Self::Icons => {
-                self.icon_size(icon_scale)
-                    + if item_check_boxes {
-                        gpui_filer_ui::CHECKBOX_HIT_SIZE * 2.0 + CHECKBOX_GAP * 2.0
-                    } else {
-                        0.0
-                    }
-                    + 16.0
+                (self.icon_container(icon_scale) + ICON_CHECKBOX_OVERHANG * 2.0).max(140.0)
             }
         };
         // 左右12px、列間16pxを引いた残りに収まる列数にする。
@@ -341,7 +345,7 @@ impl ViewLayout {
         match self {
             Self::Rows => ESTIMATED_ROW_HEIGHT,
             Self::Tiles => self.icon_container(icon_scale).max(44.0) + 16.0,
-            Self::Icons => self.icon_container(icon_scale) + 8.0 + 44.0 + 16.0,
+            Self::Icons => self.icon_container(icon_scale) + ICON_NAME_GAP + 44.0 + 16.0,
         }
     }
 
@@ -874,20 +878,28 @@ impl DemoEntry {
         }
     }
 
-    /// 行の Kind 列。v5 の `format_field` と同じく、フォルダは `Folder`、
-    /// ファイルは拡張子を大文字にしたものを使う。
-    fn kind_label(&self) -> String {
+    /// 行の種類表示。並べ替えとグループ分けは拡張子の元の値を使う。
+    fn kind_label(&self, translator: &Translator) -> String {
+        const MAX_UNKNOWN_EXTENSION_CHARS: usize = 6;
         if self.is_link() {
-            return "Link".into();
+            return translator.text(Message::KindLink).into_owned();
         }
         match self.kind {
-            EntryKind::Folder => "Folder".into(),
+            EntryKind::Folder => translator.text(Message::KindFolder).into_owned(),
             EntryKind::File => std::path::Path::new(&self.name)
                 .extension()
                 .and_then(|ext| ext.to_str())
                 .filter(|ext| !ext.is_empty())
-                .map(|ext| ext.to_ascii_uppercase())
-                .unwrap_or_else(|| "FILE".into()),
+                .map(|ext| {
+                    if ext.chars().count() > MAX_UNKNOWN_EXTENSION_CHARS
+                        && IconId::for_extension(ext) == IconId::File
+                    {
+                        translator.text(Message::KindUnknownExtension).into_owned()
+                    } else {
+                        ext.to_ascii_uppercase()
+                    }
+                })
+                .unwrap_or_else(|| translator.text(Message::KindFile).into_owned()),
         }
     }
 }
@@ -1120,21 +1132,16 @@ impl ModifiedDateGroupContext {
     }
 }
 
-/// 種類 grouping の順序 key と表示名。folder を先頭にし、ファイルは拡張子ごとにまとめる。
-fn kind_group(entry: &DemoEntry) -> (String, String) {
+/// 種類グループの順序キー。フォルダーを先頭にし、ファイルは拡張子ごとにまとめる。
+fn kind_group_key(entry: &DemoEntry) -> String {
     match entry.kind {
-        EntryKind::Folder => ("0-folder".into(), "フォルダー".into()),
-        EntryKind::File => match std::path::Path::new(&entry.name)
+        EntryKind::Folder => "0-folder".into(),
+        EntryKind::File => std::path::Path::new(&entry.name)
             .extension()
             .and_then(|extension| extension.to_str())
             .filter(|extension| !extension.is_empty())
-        {
-            Some(extension) => {
-                let extension = extension.to_ascii_uppercase();
-                (format!("1-{extension}"), format!("{extension} ファイル"))
-            }
-            None => ("2-no-extension".into(), "拡張子なし".into()),
-        },
+            .map(|extension| format!("1-{}", extension.to_ascii_uppercase()))
+            .unwrap_or_else(|| "2-no-extension".into()),
     }
 }
 
@@ -2810,6 +2817,7 @@ struct SelectionAggregateWork {
 #[derive(Clone, Debug)]
 pub(crate) struct InfoItemProjection {
     pub(crate) name: String,
+    pub(crate) icon: IconId,
     pub(crate) kind: String,
     pub(crate) path: std::path::PathBuf,
     pub(crate) size: Option<u64>,
@@ -3002,7 +3010,69 @@ struct QuickSearchSession {
     input: gpui::Entity<rename_editor::RenameInput>,
     input_id: gpui::EntityId,
     location_generation: u64,
+    needle: String,
+    match_revision: u64,
+    has_match: bool,
     _input_events: Subscription,
+}
+
+fn search_border(palette: gpui_filer_ui::ThemePalette) -> gpui::Rgba {
+    // accent に連動する既定の枠線と違い、検索欄の輪郭は面と文字の色に合わせる。
+    palette.surface_raised.blend(palette.text.opacity(0.16))
+}
+
+fn search_card(palette: gpui_filer_ui::ThemePalette) -> gpui::Div {
+    div()
+        .bg(palette.surface_raised)
+        .border_1()
+        .border_color(search_border(palette))
+        .rounded(px(8.0))
+        .shadow(vec![
+            gpui::BoxShadow::new(px(0.0), px(4.0), gpui::black().opacity(0.24))
+                .blur_radius(px(12.0)),
+        ])
+}
+
+fn search_field(
+    input: gpui::Entity<rename_editor::RenameInput>,
+    placeholder: String,
+    cx: &App,
+) -> gpui::Div {
+    let palette = gpui_filer_ui::theme_palette(cx);
+    let show_placeholder = input.read(cx).text().is_empty();
+    div()
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .text_size(px(14.0))
+        .line_height(px(20.0))
+        .text_color(palette.text)
+        .child(
+            div().flex_shrink_0().child(
+                Icon::new(IconId::Search)
+                    .size(px(16.0))
+                    .color(palette.text_muted.into()),
+            ),
+        )
+        .child(
+            div()
+                .relative()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .when(show_placeholder, |field| {
+                    field.child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .truncate()
+                            .text_size(px(12.0))
+                            .text_color(palette.text_muted)
+                            .child(placeholder),
+                    )
+                })
+                .child(input),
+        )
 }
 
 struct RectangleDrag;
@@ -3860,7 +3930,7 @@ impl DirectoryListDemo {
     fn apply_heading_height_estimates(&mut self) {
         for &row in &self.heading_rows {
             self.heights
-                .set_content(row..row + 1, gpui_filer_ui::CHECKBOX_HIT_SIZE);
+                .set_content(row..row + 1, gpui_filer_ui::CHECKBOX_COMPACT_HEIGHT);
         }
         let category_height =
             self.layout.estimated_height(self.icon_scale) + gpui_filer_ui::CHECKBOX_HIT_SIZE;
@@ -3907,9 +3977,14 @@ impl DirectoryListDemo {
             let mut groups = Vec::new();
             let mut start = 0;
             while start < self.entries.len() {
-                let (key, label) = kind_group(&self.entries[start]);
+                let key = kind_group_key(&self.entries[start]);
+                let label = match key.as_str() {
+                    "0-folder" => self.translator.text(Message::KindFolder).into_owned(),
+                    "2-no-extension" => self.translator.text(Message::KindNoExtensionGroup).into_owned(),
+                    extension => self.translator.kind_extension_group(&extension[2..]),
+                };
                 let mut end = start + 1;
-                while end < self.entries.len() && kind_group(&self.entries[end]).0 == key {
+                while end < self.entries.len() && kind_group_key(&self.entries[end]) == key {
                     end += 1;
                 }
                 groups.push((key, label, start, end));
@@ -4049,7 +4124,7 @@ impl DirectoryListDemo {
             + self
                 .heights
                 .row_height(heading)
-                .map_or(gpui_filer_ui::CHECKBOX_HIT_SIZE, |height| height.content);
+                .map_or(gpui_filer_ui::CHECKBOX_COMPACT_HEIGHT, |height| height.content);
         (bottom < offset).then_some(heading)
     }
 
@@ -4074,7 +4149,7 @@ impl DirectoryListDemo {
             }
             GroupBy::Kind => self
                 .entries
-                .sort_by(|left, right| kind_group(left).0.cmp(&kind_group(right).0)),
+                .sort_by_key(kind_group_key),
         }
     }
 
@@ -4186,7 +4261,7 @@ impl DirectoryListDemo {
             self.row_details.insert(
                 entry.key.clone(),
                 RowDetails {
-                    kind: entry.kind_label().into(),
+                    kind: entry.kind_label(&self.translator).into(),
                     // Everything index の folder size は通常の一覧サイズとして表示する。
                     // ただし operation の byte total には使わない。
                     size: projected_entry_size(entry, &self.translator).into(),
@@ -5095,7 +5170,7 @@ impl DirectoryListDemo {
             self.pc_base_sources_complete = folders.is_some();
             self.pc_wsl_loaded = true;
             self.pc_loaded = true;
-            special::place_rows(folders.unwrap_or_default())
+            special::place_rows(folders.unwrap_or_default(), &self.translator)
         };
         if rows == self.pc_rows {
             // 同じ内容を毎フレーム書き戻さない。選択とスクロールを保つ。
@@ -8673,6 +8748,7 @@ impl DirectoryListDemo {
                         return;
                     };
                     if input.read(cx).is_composing() {
+                        cx.notify();
                         return;
                     }
                     let query = input.read(cx).text().to_owned();
@@ -8687,6 +8763,9 @@ impl DirectoryListDemo {
             input: input.clone(),
             input_id,
             location_generation: generation,
+            needle: String::new(),
+            match_revision: self.presentation_revision,
+            has_match: false,
             _input_events: input_events,
         });
         input.update(cx, |input, cx| input.focus(window, cx));
@@ -8694,16 +8773,23 @@ impl DirectoryListDemo {
     }
 
     fn apply_quick_search_query(&mut self, query: &str, cx: &mut Context<Self>) {
-        let query = query.trim();
-        if query.is_empty() || self.entries.is_empty() {
+        let Some(session) = self.quick_search.as_mut() else {
             return;
-        }
-        let needle = query.to_lowercase();
+        };
+        let needle = query.trim().to_lowercase();
         let count = self.entries.len();
         let start = self.selection.focused().unwrap_or(0);
-        let found = (1..=count)
-            .map(|offset| (start + offset) % count)
-            .find(|&index| self.entries[index].name.to_lowercase().contains(&needle));
+        let found = if needle.is_empty() {
+            None
+        } else {
+            (1..=count)
+                .map(|offset| (start + offset) % count)
+                .find(|&index| self.entries[index].name.to_lowercase().contains(&needle))
+        };
+        session.needle = needle;
+        session.match_revision = self.presentation_revision;
+        session.has_match = found.is_some();
+        cx.notify();
         let Some(index) = found else {
             return;
         };
@@ -8724,7 +8810,30 @@ impl DirectoryListDemo {
             target: self.quick_preview_target(index),
             open: false,
         });
-        cx.notify();
+    }
+
+    fn quick_search_has_no_match(&mut self) -> bool {
+        let Some(session) = self.quick_search.as_mut() else {
+            return false;
+        };
+        if session.needle.is_empty()
+            || self.session.status().error().is_some()
+            || matches!(
+                self.session.status(),
+                directory_session::ListingStatus::InitialLoading
+            )
+        {
+            return false;
+        }
+        // 一覧の更新後だけ照合し直す。スクロールや描画のたびに全項目を走査しない。
+        if session.match_revision != self.presentation_revision {
+            session.has_match = self
+                .entries
+                .iter()
+                .any(|entry| entry.name.to_lowercase().contains(&session.needle));
+            session.match_revision = self.presentation_revision;
+        }
+        !session.has_match
     }
 
     /// パンくずの余白を text input に置き換える。現在地を表示するだけなので、
@@ -9500,6 +9609,10 @@ impl DirectoryListDemo {
 
     pub(crate) fn set_translator(&mut self, translator: Translator, cx: &mut Context<Self>) {
         self.translator = translator;
+        self.rebuild_row_details();
+        if self.group_by != GroupBy::None {
+            self.reset_projected_rows();
+        }
         cx.notify();
     }
 
@@ -11083,6 +11196,7 @@ impl DirectoryListDemo {
             };
             Some(InfoItemProjection {
                 name: entry.name.clone(),
+                icon: entry.icon(),
                 kind,
                 path: path.clone(),
                 size: (entry.kind == EntryKind::File)
@@ -11916,27 +12030,28 @@ impl DirectoryListDemo {
                 revision,
             ))
             .debug_selector(|| format!("item-surface-{part}-{index}"))
-            .when(selected, |surface| surface.bg(palette.selection_bg))
-            .when(focused_selected, |surface| {
-                surface.bg(palette.selection_focus_bg)
-            })
-            .when(focused && !selected, |surface| surface.bg(palette.focus_bg))
-            .when(hovered, |surface| {
-                surface.bg(if selected {
-                    palette.selection_hover_bg
-                } else {
-                    palette.hover_bg
-                })
-            })
-            .hover(move |style| {
-                style.bg(if selected {
-                    palette.selection_hover_bg
-                } else {
-                    palette.hover_bg
-                })
+            .when(!matches!(part, "visual" | "name"), |surface| {
+                surface
+                    .when(selected, |surface| surface.bg(palette.selection_bg))
+                    .when(focused_selected, |surface| surface.bg(palette.selection_focus_bg))
+                    .when(focused && !selected, |surface| surface.bg(palette.focus_bg))
+                    .when(hovered, |surface| {
+                        surface.bg(if selected {
+                            palette.selection_hover_bg
+                        } else {
+                            palette.hover_bg
+                        })
+                    })
+                    .hover(move |style| {
+                        style.bg(if selected {
+                            palette.selection_hover_bg
+                        } else {
+                            palette.hover_bg
+                        })
+                    })
             })
             .when(grouped, |surface| {
-                // カードの余白までhover扱いにせず、iconと名前の実際のhit領域だけを連動する。
+                // 項目向けの binding は icon と名前の hit 領域で判定する。
                 surface.on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                     if background_input_blocked_by_batch_rename(this.batch_rename_session.is_some())
                     {
@@ -12644,9 +12759,13 @@ impl DirectoryListDemo {
                     - CELL_GAP
             }
             ViewLayout::Tiles => {
-                cell_width - 44.0 - self.layout.icon_container(self.icon_scale) - 16.0 - 12.0
+                cell_width
+                    - self
+                        .layout
+                        .tile_name_offset(self.icon_scale, self.item_check_boxes)
+                    - GRID_NAME_PADDING_X * 2.0
             }
-            ViewLayout::Icons => cell_width - 12.0,
+            ViewLayout::Icons => cell_width - GRID_NAME_PADDING_X * 2.0,
         }
         .max(1.0)
     }
@@ -12696,8 +12815,7 @@ impl DirectoryListDemo {
     }
 
     fn measure_group_text(&self, row: usize, width: f32, window: &Window, cx: &App) -> Option<f32> {
-        let text_width = self.item_name_text_width(width);
-        let mut height: f32 = 44.0;
+        let mut height = ESTIMATED_ROW_HEIGHT;
         for index in self.row_entries(row) {
             let entry = &self.entries[index];
             let rename_name = self
@@ -12705,14 +12823,24 @@ impl DirectoryListDemo {
                 .as_ref()
                 .filter(|session| session.key == entry.key)
                 .map(|session| session.input.read(cx).text().to_owned());
-            let name = rename_name.as_deref().unwrap_or(&entry.name);
-            let text_height = self.shaped_name_height(name, text_width, window)?;
-            let label = (text_height + CELL_PADDING_Y * 2.0).max(44.0);
+            if self.layout == ViewLayout::Rows && rename_name.is_none() {
+                // 名前は一行で省略する。編集中の入力欄だけは折り返し高を測る。
+                continue;
+            }
+            let label = if self.layout != ViewLayout::Rows && rename_name.is_none() {
+                // 通常の名前は18pxの2行と上下余白で、44pxのhit領域に収まる。
+                44.0
+            } else {
+                let name = rename_name.as_deref().unwrap_or(&entry.name);
+                let text_width = self.item_name_text_width(width);
+                let text_height = self.shaped_name_height(name, text_width, window)?;
+                (text_height + CELL_PADDING_Y * 2.0).max(ESTIMATED_ROW_HEIGHT)
+            };
             let container = self.layout.icon_container(self.icon_scale);
             let item = match self.layout {
                 ViewLayout::Rows => label,
                 ViewLayout::Tiles => label.max(container) + 16.0,
-                ViewLayout::Icons => container + 8.0 + label + 16.0,
+                ViewLayout::Icons => container + ICON_NAME_GAP + label + 16.0,
             };
             height = height.max(item);
         }
@@ -13246,6 +13374,64 @@ impl Render for DirectoryListDemo {
             );
         }
         let rows_time = rows_started.map_or(std::time::Duration::ZERO, |start| start.elapsed());
+        let palette = gpui_filer_ui::theme_palette(cx);
+        let quick_search_empty = self.quick_search_has_no_match().then(|| {
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .p(px(16.0))
+                .child(
+                    search_card(palette)
+                        .px(px(16.0))
+                        .py(px(10.0))
+                        .text_center()
+                        .text_size(px(14.0))
+                        .text_color(palette.text_muted)
+                        .child(
+                            self.translator
+                                .text(Message::QuickSearchNoMatches)
+                                .into_owned(),
+                        ),
+                )
+        });
+        // 件数は受理済みの一覧から読む。空表示はスクロール領域の計測や入力に参加させない。
+        let empty_folder = if quick_search_empty.is_none()
+            && self.entries.is_empty()
+            && matches!(self.session.location(), Some(Location::Path(_)))
+            && self.session.status().error().is_none()
+        {
+            self.session.listing().map(|listing| {
+                let message = if listing.is_empty() {
+                    Message::EmptyFolder
+                } else {
+                    Message::HiddenFolderItems
+                };
+                let muted = gpui_filer_ui::theme_palette(cx).text_muted;
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(10.0))
+                    .p(px(16.0))
+                    .text_center()
+                    .text_size(px(14.0))
+                    .text_color(muted)
+                    .child(
+                        Icon::new(IconId::FolderFallbackGlyph)
+                            .size(px(48.0))
+                            .color(muted.opacity(0.65).into()),
+                    )
+                    .child(self.translator.text(message).into_owned())
+            })
+        } else {
+            None
+        };
         let scroll_surface_started = self.frame_profile.start();
         let scroll_surface = self.render_scroll_area(rows, cx);
         let scroll_surface_time =
@@ -13254,6 +13440,7 @@ impl Render for DirectoryListDemo {
         let width_reconcile_scheduled = self.viewport_reconcile_scheduled.clone();
         let rendered_layout_width = self.layout_width;
         let list_viewport = div()
+            .relative()
             .flex_1()
             .min_h_0()
             .flex()
@@ -13289,13 +13476,14 @@ impl Render for DirectoryListDemo {
                     });
                 });
             })
-            .child(scroll_surface);
+            .child(scroll_surface)
+            .children(empty_folder)
+            .children(quick_search_empty);
 
         let quick_search_input = self
             .quick_search
             .as_ref()
             .map(|session| session.input.clone());
-        let palette = gpui_filer_ui::theme_palette(cx);
         let rename_error = self
             .rename_session
             .as_ref()
@@ -13430,16 +13618,18 @@ impl Render for DirectoryListDemo {
             .child(list_viewport)
             .when_some(quick_search_input, |root, input| {
                 root.child(
-                    div()
+                    search_card(palette)
+                        .id("quick-search")
                         .absolute()
-                        .top(px(8.0))
+                        .top(px(4.0))
                         .right(px(14.0))
                         .w(px(300.0))
-                        .p(px(6.0))
-                        .bg(palette.surface_raised)
-                        .border_1()
-                        .border_color(palette.border)
-                        .rounded(px(6.0))
+                        .max_w(relative(0.92))
+                        .h(px(44.0))
+                        .px(px(14.0))
+                        .flex()
+                        .flex_col()
+                        .justify_center()
                         .on_mouse_down(
                             gpui::MouseButton::Left,
                             cx.listener(|this, _, window, cx| {
@@ -13457,7 +13647,13 @@ impl Render for DirectoryListDemo {
                         .on_mouse_down(gpui::MouseButton::Right, |_, _, cx| {
                             cx.stop_propagation()
                         })
-                        .child(div().min_h(px(44.0)).child(input)),
+                        .child(search_field(
+                            input,
+                            self.translator
+                                .text(Message::QuickSearchPlaceholder)
+                                .into_owned(),
+                            cx,
+                        )),
                 )
             })
             .when_some(self.render_batch_rename_dialog(cx), |root, dialog| {
@@ -14435,6 +14631,43 @@ mod layout_tests {
             });
             window.update_entity(&view, |view, _| view.item_check_boxes = false);
         }
+    }
+
+    #[gpui::test]
+    fn icon_checkbox_toggles_selection_without_covering_the_icon_center(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.set_global(crate::ItemCheckBoxes(true));
+        let (harness, window_handle) = hidden_visibility_window(cx, "icon-checkbox-overlay");
+        let mut window = gpui::VisualTestContext::from_window(window_handle, cx);
+        let view = window.read_entity(&harness, |harness, _| harness.view.clone());
+        window.update_entity(&view, |view, cx| {
+            view.layout = ViewLayout::Icons;
+            view.icon_scale = ICON_SCALE_MIN;
+            view.layout_width = 0.0;
+            cx.notify();
+        });
+        window.run_until_parked();
+
+        let visual = window.debug_bounds("item-surface-visual-0").unwrap();
+        let center = gpui::point(
+            visual.origin.x + visual.size.width / 2.0,
+            visual.origin.y + visual.size.height / 2.0,
+        );
+        let half_hit = gpui_filer_ui::CHECKBOX_HIT_SIZE / 2.0;
+        let checkbox = gpui::point(
+            visual.origin.x + px(half_hit - ICON_CHECKBOX_OVERHANG),
+            visual.origin.y + px(half_hit),
+        );
+        let modifiers = gpui::Modifiers::default();
+
+        window.simulate_mouse_down(center, gpui::MouseButton::Left, modifiers);
+        window.simulate_mouse_up(center, gpui::MouseButton::Left, modifiers);
+        window.read_entity(&view, |view, _| assert!(view.selection.contains(0)));
+
+        window.simulate_mouse_down(checkbox, gpui::MouseButton::Left, modifiers);
+        window.simulate_mouse_up(checkbox, gpui::MouseButton::Left, modifiers);
+        window.read_entity(&view, |view, _| assert!(!view.selection.contains(0)));
     }
 
     #[gpui::test]
@@ -17815,6 +18048,14 @@ mod layout_tests {
             ViewLayout::Tiles.columns(300.0, ICON_SCALE_DEFAULT, true),
             1
         );
+        assert_eq!(
+            ViewLayout::Tiles.columns(
+                1280.0 - shell::DEFAULT_SIDEBAR_WIDTH,
+                ICON_SCALE_DEFAULT,
+                true,
+            ),
+            4
+        );
         assert!(
             ViewLayout::Tiles.columns(840.0, ICON_SCALE_DEFAULT, false)
                 >= ViewLayout::Tiles.columns(840.0, ICON_SCALE_DEFAULT, true)
@@ -17822,15 +18063,15 @@ mod layout_tests {
     }
 
     #[test]
-    fn icon_row_fits_inside_a_column() {
-        // アイコン表示は icon の両脇に checkbox と同幅の空きを置く。
-        // その行が1列の幅に収まらないと、checkbox が隣の列へはみ出す。
+    fn icon_checkbox_overlay_fits_inside_a_column() {
         let width = 840.0 - shell::DEFAULT_SIDEBAR_WIDTH;
-        let columns = ViewLayout::Icons.columns(width, ICON_SCALE_DEFAULT, true);
-        let cell = (width - 24.0 - 16.0 * (columns - 1) as f32) / columns as f32;
-        let icon = ViewLayout::Icons.icon_size(ICON_SCALE_DEFAULT);
-        let row = gpui_filer_ui::CHECKBOX_HIT_SIZE * 2.0 + CHECKBOX_GAP * 2.0 + (icon + 16.0);
-        assert!(row <= cell, "row={row} cell={cell}");
+        for scale in [ICON_SCALE_MIN, ICON_SCALE_DEFAULT, ICON_SCALE_MAX] {
+            let columns = ViewLayout::Icons.columns(width, scale, true);
+            let cell = (width - 24.0 - 16.0 * (columns - 1) as f32) / columns as f32;
+            let icon_box = ViewLayout::Icons.icon_container(scale);
+            assert!((cell - icon_box) / 2.0 >= ICON_CHECKBOX_OVERHANG);
+            assert!(gpui_filer_ui::CHECKBOX_HIT_SIZE - ICON_CHECKBOX_OVERHANG < icon_box / 2.0);
+        }
     }
 
     #[test]

@@ -276,10 +276,23 @@ impl gpui::Asset for PcKnownFolders {
 }
 
 #[cfg(not(windows))]
-pub fn place_rows(mut known_folders: Vec<PcEntry>) -> Vec<PcEntry> {
+pub fn place_rows(
+    mut known_folders: Vec<PcEntry>,
+    translator: &crate::shell::Translator,
+) -> Vec<PcEntry> {
+    // キャッシュした path と icon から、現在のアプリ言語で表示名を引く。
+    for row in &mut known_folders {
+        if let PcEntryKind::Place(icon) = row.kind
+            && let Some(label) = places::place_label(icon)
+        {
+            row.name = translator.text(label).into_owned();
+        }
+    }
     // リムーバブルとリモートの mount は別の対応で列挙する。
     known_folders.push(PcEntry {
-        name: "File System".into(),
+        name: translator
+            .text(crate::shell::Message::PcPlaceFileSystem)
+            .into_owned(),
         target: Location::Path(PathBuf::from("/")),
         kind: PcEntryKind::Drive,
         source_identity: None,

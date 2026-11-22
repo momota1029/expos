@@ -7,15 +7,50 @@ use gpui_filer_resources::IconId;
 
 use super::{PcEntry, PcEntryKind};
 use crate::location::Location;
+use crate::shell::Message;
 
-const USER_DIRS: &[(&str, &str, IconId)] = &[
-    ("DESKTOP", "Desktop", IconId::FolderDesktop),
-    ("DOCUMENTS", "Documents", IconId::FolderDocuments),
-    ("DOWNLOAD", "Downloads", IconId::FolderDownloads),
-    ("MUSIC", "Music", IconId::FolderMusic),
-    ("PICTURES", "Pictures", IconId::FolderPictures),
-    ("VIDEOS", "Videos", IconId::FolderVideos),
+const USER_DIRS: &[(&str, &str, IconId, Message)] = &[
+    (
+        "DESKTOP",
+        "Desktop",
+        IconId::FolderDesktop,
+        Message::PcPlaceDesktop,
+    ),
+    (
+        "DOCUMENTS",
+        "Documents",
+        IconId::FolderDocuments,
+        Message::PcPlaceDocuments,
+    ),
+    (
+        "DOWNLOAD",
+        "Downloads",
+        IconId::FolderDownloads,
+        Message::PcPlaceDownloads,
+    ),
+    ("MUSIC", "Music", IconId::FolderMusic, Message::PcPlaceMusic),
+    (
+        "PICTURES",
+        "Pictures",
+        IconId::FolderPictures,
+        Message::PcPlacePictures,
+    ),
+    (
+        "VIDEOS",
+        "Videos",
+        IconId::FolderVideos,
+        Message::PcPlaceVideos,
+    ),
 ];
+
+pub(super) fn place_label(icon: IconId) -> Option<Message> {
+    if icon == IconId::FolderHome {
+        return Some(Message::PcPlaceHome);
+    }
+    USER_DIRS
+        .iter()
+        .find_map(|&(_, _, place_icon, label)| (place_icon == icon).then_some(label))
+}
 
 pub(super) fn known_folders() -> Vec<PcEntry> {
     let home = std::env::var_os("HOME")
@@ -42,7 +77,7 @@ fn known_folder_rows(
         rows.push(place("Home", home.to_path_buf(), IconId::FolderHome));
     }
 
-    for &(key, name, icon) in USER_DIRS {
+    for &(key, name, icon, _) in USER_DIRS {
         let path = configured.get(key).map(PathBuf::as_path);
         // xdg-user-dirs は無効化されたディレクトリを HOME に設定する。
         if path.is_some() && path == home {
@@ -180,7 +215,9 @@ mod tests {
             .iter()
             .any(|existing| path == Path::new(existing))
         });
-        let rows = super::super::place_rows(folders);
+        use crate::shell::{Locale, Translator};
+
+        let rows = super::super::place_rows(folders.clone(), &Translator::new(Locale::English));
         let actual = rows
             .iter()
             .map(|row| (row.name.as_str(), row.target.path().unwrap(), row.kind))
@@ -201,6 +238,20 @@ mod tests {
                 ),
                 ("File System", Path::new("/"), PcEntryKind::Drive),
             ]
+        );
+        let japanese = super::super::place_rows(folders, &Translator::new(Locale::Japanese));
+        assert_eq!(
+            japanese
+                .iter()
+                .map(|row| row.name.as_str())
+                .collect::<Vec<_>>(),
+            ["ホーム", "ドキュメント", "ダウンロード", "ファイルシステム"]
+        );
+        assert!(
+            japanese
+                .iter()
+                .zip(&rows)
+                .all(|(ja, en)| ja.target == en.target)
         );
     }
 }

@@ -52,13 +52,14 @@ fn default_order() -> [crate::sorting::Column; 4] {
 }
 
 fn default_kind_width() -> f32 {
-    80.0
+    112.0
 }
 fn default_size_width() -> f32 {
-    80.0
+    104.0
 }
 fn default_modified_width() -> f32 {
-    120.0
+    // YYYY-MM-DD HH:MM を、左右の cell padding を含めて収める。
+    152.0
 }
 
 fn deserialize_width<'de, D>(deserializer: D) -> Result<f32, D::Error>
@@ -76,9 +77,9 @@ where
 impl ColumnPrefs {
     pub fn normalized(self) -> Self {
         Self {
-            kind_width: normalize_width(self.kind_width, 80.0),
-            size_width: normalize_width(self.size_width, 80.0),
-            modified_width: normalize_width(self.modified_width, 120.0),
+            kind_width: normalize_width(self.kind_width, default_kind_width()),
+            size_width: normalize_width(self.size_width, default_size_width()),
+            modified_width: normalize_width(self.modified_width, default_modified_width()),
             ..self
         }
     }
@@ -178,9 +179,9 @@ impl FolderViewPrefs {
                 let width = normalize_width(
                     width,
                     match column {
-                        crate::sorting::Column::Kind => 80.0,
-                        crate::sorting::Column::Size => 80.0,
-                        crate::sorting::Column::Modified => 120.0,
+                        crate::sorting::Column::Kind => default_kind_width(),
+                        crate::sorting::Column::Size => default_size_width(),
+                        crate::sorting::Column::Modified => default_modified_width(),
                         crate::sorting::Column::Name => return self,
                     },
                 );

@@ -137,11 +137,18 @@ pub(crate) enum Message {
     ClosedTabHistoryRecordTooLarge,
     ClearClosedTabHistoryAndRetry,
     SampleList,
+    EmptyFolder,
+    HiddenFolderItems,
     /// 一覧の列見出し。v5 の `ColumnKind::label()` と同じ語を使う。
     ColumnName,
     ColumnKind,
     ColumnSize,
     ColumnModified,
+    KindFolder,
+    KindLink,
+    KindFile,
+    KindUnknownExtension,
+    KindNoExtensionGroup,
     /// 一覧の状態表示。
     Loading,
     LoadFailed,
@@ -157,6 +164,51 @@ pub(crate) enum Message {
     /// 受理済みファイル操作を開始できなかった。
     OperationCapacityReached,
     OperationRetryRejected,
+    FileOperationsTitle,
+    FileOperationsRename,
+    FileOperationsCompleted,
+    FileOperationsCancelled,
+    FileOperationsRecoveryRequired,
+    FileOperationsAccessDenied,
+    FileOperationsUnsupported,
+    FileOperationsDiscovered,
+    FileOperationsEligibleItems,
+    FileOperationsHistoricalMove,
+    FileOperationsHistoricalReplace,
+    FileOperationsDestinationIdentity,
+    FileOperationsIdentityUnverified,
+    FileOperationsRootOnlyObservations,
+    FileOperationsStageRootNow,
+    FileOperationsBackupRootNow,
+    FileOperationsStageIdentity,
+    FileOperationsDisplacedIdentity,
+    FileOperationsBackupCleanup,
+    FileOperationsBackupChildReceipts,
+    FileOperationsPendingBackupIntent,
+    FileOperationsRecordedPublicationPhase,
+    FileOperationsRecordedStagePhase,
+    FileOperationsReason,
+    FileOperationsExpectedRootIdentity,
+    FileOperationsExpectedNodeCount,
+    FileOperationsExpectedTreeCommitment,
+    FileOperationsPublishedRootIdentity,
+    FileOperationsPublishedNodeCount,
+    FileOperationsPublishedTreeCommitment,
+    FileOperationsCreationRootIdentity,
+    FileOperationsRecordedStagePath,
+    FileOperationsRootMatchCaveat,
+    JobProgressTitle,
+    JobProgressWaiting,
+    JobProgressDetails,
+    JobProgressClose,
+    JobProgressQueued,
+    JobProgressPreparing,
+    JobProgressRunning,
+    JobProgressWaitingConflict,
+    JobProgressCancelRequested,
+    JobProgressExtract7z,
+    JobProgressExternalMoveCleanup,
+    JobProgressCopyStageCleanup,
     UndoOperationRejected,
     UndoOperationPartial,
     MoveInspectionPending,
@@ -423,6 +475,8 @@ pub(crate) enum Message {
     LanguagePseudo,
     SearchTitle,
     SearchTypeToSearch,
+    QuickSearchPlaceholder,
+    QuickSearchNoMatches,
     SearchUsage,
     SearchExamples,
     SearchActivationHint,
@@ -452,6 +506,14 @@ pub(crate) enum Message {
     NewWindowFailed,
     /// パンくずの先頭に出す仮想のルート（Explorer の PC）。
     ThisPc,
+    PcPlaceHome,
+    PcPlaceDesktop,
+    PcPlaceDocuments,
+    PcPlaceDownloads,
+    PcPlaceMusic,
+    PcPlacePictures,
+    PcPlaceVideos,
+    PcPlaceFileSystem,
     /// メニューに出すコマンド名。
     Refresh,
     NavigateBack,
@@ -558,10 +620,16 @@ impl Translator {
                 "閉じたタブとワークスペースの履歴を消去して再試行"
             }
             Message::SampleList => "サンプル一覧",
-            Message::ColumnName => "Name",
-            Message::ColumnKind => "Kind",
-            Message::ColumnSize => "Size",
-            Message::ColumnModified => "Date modified",
+            Message::EmptyFolder => "このフォルダーは空です",
+            Message::HiddenFolderItems => "表示できる項目がありません",
+            Message::ColumnName => "名前",
+            Message::ColumnKind => "種類",
+            Message::ColumnSize => "サイズ",
+            Message::ColumnModified => "更新日時",
+            Message::KindFolder => "フォルダー",
+            Message::KindLink => "リンク",
+            Message::KindFile | Message::KindUnknownExtension => "ファイル",
+            Message::KindNoExtensionGroup => "拡張子なし",
             Message::Loading => "読み込み中",
             Message::LoadFailed => "読み込み失敗",
             Message::Refreshing => "読み直し中",
@@ -575,6 +643,55 @@ impl Translator {
                 "操作が多すぎるため、このファイル操作を開始できませんでした"
             }
             Message::OperationRetryRejected => "このファイル操作は再試行できません",
+            Message::FileOperationsTitle => "ファイル操作",
+            Message::FileOperationsRename => "名前の変更",
+            Message::FileOperationsCompleted => "完了",
+            Message::FileOperationsCancelled => "キャンセル済み",
+            Message::FileOperationsRecoveryRequired => "復旧が必要",
+            Message::FileOperationsAccessDenied => "アクセスが拒否されました",
+            Message::FileOperationsUnsupported => "この操作には対応していません",
+            Message::FileOperationsDiscovered => "検出済み",
+            Message::FileOperationsEligibleItems => "再試行できる項目数",
+            Message::FileOperationsHistoricalMove => "移動のジャーナル記録（過去の情報）",
+            Message::FileOperationsHistoricalReplace => "置換のジャーナル記録（過去の情報）",
+            Message::FileOperationsDestinationIdentity => "記録された移動先の識別情報",
+            Message::FileOperationsIdentityUnverified => "変更あり、または確認できない",
+            Message::FileOperationsRootOnlyObservations => {
+                "検査時点でのルートの観測（子項目と内容は未確認）"
+            }
+            Message::FileOperationsStageRootNow => "ステージルートの現在の観測",
+            Message::FileOperationsBackupRootNow => "バックアップルートの現在の観測",
+            Message::FileOperationsStageIdentity => "受け入れ側ステージの識別情報",
+            Message::FileOperationsDisplacedIdentity => "退避した対象の識別情報",
+            Message::FileOperationsBackupCleanup => "記録されたバックアップの後片付け",
+            Message::FileOperationsBackupChildReceipts => "バックアップの子項目の処理記録",
+            Message::FileOperationsPendingBackupIntent => "未解決のバックアップ処理の記録",
+            Message::FileOperationsRecordedPublicationPhase => "記録された公開の段階",
+            Message::FileOperationsRecordedStagePhase => "記録されたステージの段階",
+            Message::FileOperationsReason => "理由",
+            Message::FileOperationsExpectedRootIdentity => "想定されたルートの識別情報",
+            Message::FileOperationsExpectedNodeCount => "想定された項目数",
+            Message::FileOperationsExpectedTreeCommitment => "想定されたツリーのハッシュ",
+            Message::FileOperationsPublishedRootIdentity => "公開後に記録されたルートの識別情報",
+            Message::FileOperationsPublishedNodeCount => "公開後に記録された項目数",
+            Message::FileOperationsPublishedTreeCommitment => "公開後に記録されたツリーのハッシュ",
+            Message::FileOperationsCreationRootIdentity => "作成時のルートの識別情報",
+            Message::FileOperationsRecordedStagePath => "記録されたステージのパス",
+            Message::FileOperationsRootMatchCaveat => {
+                "ルートの識別情報が一致しても、子項目の一覧や内容が変わっていないかは確認できません。"
+            }
+            Message::JobProgressTitle => "ジョブの進行状況",
+            Message::JobProgressWaiting => "進行状況を待機中",
+            Message::JobProgressDetails => "詳細",
+            Message::JobProgressClose => "閉じる",
+            Message::JobProgressQueued => "順番待ち",
+            Message::JobProgressPreparing => "準備中",
+            Message::JobProgressRunning => "実行中",
+            Message::JobProgressWaitingConflict => "競合の解決待ち",
+            Message::JobProgressCancelRequested => "キャンセル処理中",
+            Message::JobProgressExtract7z => "7z 展開",
+            Message::JobProgressExternalMoveCleanup => "移動元の後片付け",
+            Message::JobProgressCopyStageCleanup => "コピー用ステージの削除",
             Message::UndoOperationRejected => {
                 "取り消し結果を確認できませんでした。記録は保持しています"
             }
@@ -872,6 +989,8 @@ impl Translator {
             Message::LanguagePseudo => "疑似ロケール（デバッグ）",
             Message::SearchTitle => "Everything 検索",
             Message::SearchTypeToSearch => "入力して検索",
+            Message::QuickSearchPlaceholder => "このフォルダー内を検索",
+            Message::QuickSearchNoMatches => "一致する項目がありません",
             Message::SearchUsage => "ファイル名やパスの一部を入力して検索します",
             Message::SearchExamples => "例: report / *.png / C:\\Users\\ / folder:src",
             Message::SearchActivationHint => {
@@ -904,6 +1023,14 @@ impl Translator {
             Message::NewWindow => "新しいウィンドウ",
             Message::NewWindowFailed => "新しいウィンドウを開けませんでした",
             Message::ThisPc => "PC",
+            Message::PcPlaceHome => "ホーム",
+            Message::PcPlaceDesktop => "デスクトップ",
+            Message::PcPlaceDocuments => "ドキュメント",
+            Message::PcPlaceDownloads => "ダウンロード",
+            Message::PcPlaceMusic => "ミュージック",
+            Message::PcPlacePictures => "ピクチャ",
+            Message::PcPlaceVideos => "ビデオ",
+            Message::PcPlaceFileSystem => "ファイルシステム",
             Message::Refresh => "読み直し",
             Message::NavigateBack => "戻る",
             Message::NavigateForward => "進む",
@@ -968,6 +1095,44 @@ impl Translator {
         })
     }
 
+    pub(crate) fn workspace_name(&self, number: usize) -> String {
+        self.expand(match self.locale {
+            Locale::Japanese => format!("ワークスペース {number}"),
+            Locale::English => format!("Workspace {number}"),
+        })
+    }
+
+    pub(crate) fn workspace_title(
+        &self,
+        name: &str,
+        default_number: Option<std::num::NonZeroUsize>,
+    ) -> String {
+        default_number.map_or_else(|| name.to_owned(), |number| self.workspace_name(number.get()))
+    }
+
+    pub(crate) fn kind_extension_group(&self, extension: &str) -> String {
+        self.expand(match self.locale {
+            Locale::Japanese => format!("{extension} ファイル"),
+            Locale::English => format!("{extension} files"),
+        })
+    }
+
+    pub(crate) fn job_progress_counters(&self, count: u64, bytes: &str) -> String {
+        self.expand(match self.locale {
+            Locale::Japanese => format!("{count} 件 · {bytes}"),
+            Locale::English if count == 1 => format!("{count} item · {bytes}"),
+            Locale::English => format!("{count} items · {bytes}"),
+        })
+    }
+
+    pub(crate) fn other_operation_issues(&self, count: usize) -> String {
+        self.expand(match self.locale {
+            Locale::Japanese => format!("ほか {count} 件に問題があります"),
+            Locale::English if count == 1 => "1 other item had an issue".into(),
+            Locale::English => format!("{count} other items had issues"),
+        })
+    }
+
     pub(crate) fn search_result_count(&self, count: usize) -> String {
         self.expand(match self.locale {
             Locale::Japanese => format!("検索結果: {} 件", group_source_decimal(count)),
@@ -983,11 +1148,10 @@ impl Translator {
         &self,
         selected_count: usize,
         aggregate: Option<(usize, usize, Option<u64>, usize)>,
-    ) -> Vec<String> {
-        let mut rows = vec![format!(
-            "{}: {}",
-            self.text(Message::FileInfoItems),
-            group_source_decimal(selected_count)
+    ) -> Vec<(Message, String)> {
+        let mut rows = vec![(
+            Message::FileInfoItems,
+            self.expand(group_source_decimal(selected_count)),
         )];
         for (label, count) in [
             (Message::FileInfoFiles, aggregate.map(|value| value.0)),
@@ -995,14 +1159,14 @@ impl Translator {
         ] {
             let value = count.map_or_else(
                 || self.text(Message::FileInfoCalculating).into_owned(),
-                group_source_decimal,
+                |count| self.expand(group_source_decimal(count)),
             );
-            rows.push(format!("{}: {value}", self.text(label)));
+            rows.push((label, value));
         }
         let total = match aggregate {
             None => self.text(Message::FileInfoCalculating).into_owned(),
             Some((_, _, Some(size), _)) => self.size(Some(size)),
-            Some((_, _, None, unknown)) if unknown > 0 => match self.locale {
+            Some((_, _, None, unknown)) if unknown > 0 => self.expand(match self.locale {
                 Locale::Japanese => format!(
                     "{}（{} 件のサイズ未取得）",
                     self.text(Message::FileInfoSizeUnknown),
@@ -1013,14 +1177,11 @@ impl Translator {
                     self.text(Message::FileInfoSizeUnknown),
                     group_source_decimal(unknown)
                 ),
-            },
+            }),
             Some((_, _, None, _)) => self.text(Message::FileInfoSizeUnknown).into_owned(),
         };
-        rows.push(format!(
-            "{}: {total}",
-            self.text(Message::FileInfoTotalSize)
-        ));
-        rows.into_iter().map(|row| self.expand(row)).collect()
+        rows.push((Message::FileInfoTotalSize, total));
+        rows
     }
 
     /// 一覧の件数と選択数の行。v5 と同じく、選択モード中だけその旨を足す。
@@ -1180,10 +1341,17 @@ fn english(message: Message) -> Option<&'static str> {
             "Clear closed tab and workspace history and retry"
         }
         Message::SampleList => "Sample list",
+        Message::EmptyFolder => "This folder is empty",
+        Message::HiddenFolderItems => "There are no items to display",
         Message::ColumnName => "Name",
         Message::ColumnKind => "Kind",
         Message::ColumnSize => "Size",
         Message::ColumnModified => "Date modified",
+        Message::KindFolder => "Folder",
+        Message::KindLink => "Link",
+        Message::KindFile => "FILE",
+        Message::KindUnknownExtension => "File",
+        Message::KindNoExtensionGroup => "No extension",
         Message::Loading => "Loading",
         Message::LoadFailed => "Load failed",
         Message::Refreshing => "Refreshing",
@@ -1197,6 +1365,55 @@ fn english(message: Message) -> Option<&'static str> {
             "Too many operations are active; this file operation could not start"
         }
         Message::OperationRetryRejected => "This file operation could not be retried",
+        Message::FileOperationsTitle => "File operations",
+        Message::FileOperationsRename => "Rename",
+        Message::FileOperationsCompleted => "Completed",
+        Message::FileOperationsCancelled => "Cancelled",
+        Message::FileOperationsRecoveryRequired => "Recovery required",
+        Message::FileOperationsAccessDenied => "Access was denied",
+        Message::FileOperationsUnsupported => "This operation is unsupported",
+        Message::FileOperationsDiscovered => "discovered",
+        Message::FileOperationsEligibleItems => "Items eligible for retry",
+        Message::FileOperationsHistoricalMove => "Historical Move journal facts",
+        Message::FileOperationsHistoricalReplace => "Historical Replace journal facts",
+        Message::FileOperationsDestinationIdentity => "Recorded destination identity",
+        Message::FileOperationsIdentityUnverified => "changed or unverified",
+        Message::FileOperationsRootOnlyObservations => {
+            "Fresh point-in-time root-only observations (children and contents not checked)"
+        }
+        Message::FileOperationsStageRootNow => "Current stage root observation",
+        Message::FileOperationsBackupRootNow => "Current backup root observation",
+        Message::FileOperationsStageIdentity => "Incoming stage identity",
+        Message::FileOperationsDisplacedIdentity => "Displaced target identity",
+        Message::FileOperationsBackupCleanup => "Recorded backup cleanup",
+        Message::FileOperationsBackupChildReceipts => "Historical backup child receipts",
+        Message::FileOperationsPendingBackupIntent => "Historical pending backup intent",
+        Message::FileOperationsRecordedPublicationPhase => "Recorded publication phase",
+        Message::FileOperationsRecordedStagePhase => "Recorded stage phase",
+        Message::FileOperationsReason => "Reason",
+        Message::FileOperationsExpectedRootIdentity => "Expected root identity",
+        Message::FileOperationsExpectedNodeCount => "Expected node count",
+        Message::FileOperationsExpectedTreeCommitment => "Expected tree commitment",
+        Message::FileOperationsPublishedRootIdentity => "Recorded post-publication root identity",
+        Message::FileOperationsPublishedNodeCount => "Recorded post-publication node count",
+        Message::FileOperationsPublishedTreeCommitment => "Recorded post-publication tree commitment",
+        Message::FileOperationsCreationRootIdentity => "Creation-time root identity",
+        Message::FileOperationsRecordedStagePath => "Recorded stage path",
+        Message::FileOperationsRootMatchCaveat => {
+            "A matching root identity does not establish child inventory or content stability."
+        }
+        Message::JobProgressTitle => "Job progress",
+        Message::JobProgressWaiting => "Waiting for progress",
+        Message::JobProgressDetails => "Details",
+        Message::JobProgressClose => "Close",
+        Message::JobProgressQueued => "Queued",
+        Message::JobProgressPreparing => "Preparing",
+        Message::JobProgressRunning => "Running",
+        Message::JobProgressWaitingConflict => "Waiting for a conflict decision",
+        Message::JobProgressCancelRequested => "Cancelling",
+        Message::JobProgressExtract7z => "Extract 7z",
+        Message::JobProgressExternalMoveCleanup => "Clean up moved files",
+        Message::JobProgressCopyStageCleanup => "Delete retained copy stage",
         Message::UndoOperationRejected => "Undo could not be confirmed; its record was kept",
         Message::UndoOperationPartial => {
             "Undo published a restore but could not finish; moved items may remain"
@@ -1494,6 +1711,8 @@ fn english(message: Message) -> Option<&'static str> {
         Message::LanguagePseudo => "Pseudo locale (debug)",
         Message::SearchTitle => "Everything Search",
         Message::SearchTypeToSearch => "Type to search",
+        Message::QuickSearchPlaceholder => "Search this folder",
+        Message::QuickSearchNoMatches => "No matching items",
         Message::SearchUsage => "Type part of a file name or path to search",
         Message::SearchExamples => "Examples: report / *.png / C:\\Users\\ / folder:src",
         Message::SearchActivationHint => {
@@ -1524,6 +1743,14 @@ fn english(message: Message) -> Option<&'static str> {
         Message::NewWindow => "New window",
         Message::NewWindowFailed => "Could not open a new window",
         Message::ThisPc => "This PC",
+        Message::PcPlaceHome => "Home",
+        Message::PcPlaceDesktop => "Desktop",
+        Message::PcPlaceDocuments => "Documents",
+        Message::PcPlaceDownloads => "Downloads",
+        Message::PcPlaceMusic => "Music",
+        Message::PcPlacePictures => "Pictures",
+        Message::PcPlaceVideos => "Videos",
+        Message::PcPlaceFileSystem => "File System",
         Message::Refresh => "Refresh",
         Message::NavigateBack => "Back",
         Message::NavigateForward => "Forward",
@@ -1660,6 +1887,10 @@ mod tests {
         assert_eq!(translator.item_count(999), "999 個");
         assert_eq!(translator.text(Message::MenuEdit), "編集");
         assert_eq!(translator.text(Message::ThisPc), "PC");
+        assert_eq!(translator.text(Message::ColumnName), "名前");
+        assert_eq!(translator.text(Message::ColumnKind), "種類");
+        assert_eq!(translator.text(Message::ColumnSize), "サイズ");
+        assert_eq!(translator.text(Message::ColumnModified), "更新日時");
         assert_eq!(translator.text(Message::NavigateBack), "戻る");
     }
 

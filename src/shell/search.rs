@@ -212,6 +212,31 @@ impl FilerShell {
             .is_some_and(|search| search.next_test_command.is_some())
     }
 
+    #[cfg(windows)]
+    pub(super) fn open_titlebar_search(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.open_search(cx);
+    }
+
+    #[cfg(not(windows))]
+    pub(super) fn open_titlebar_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let open = self.open_overlays(cx);
+        let policy = overlays::open_policy(overlays::OverlayKind::Search, open);
+        if !policy.allowed || open.search {
+            return;
+        }
+        let Some(view) = self.active_view() else {
+            return;
+        };
+        if policy.close.menu {
+            self.leave_menu(cx);
+        }
+        if policy.close.folder_tree {
+            self.close_folder_tree_menu(cx);
+            self.sync_overlay_modal(cx);
+        }
+        view.update(cx, |view, cx| view.begin_quick_search(window, cx));
+    }
+
     /// Everything overlay を開く。conflict の選択を隠してしまわないよう、そちらが
     /// active の間は開かない。入力欄の focus は overlay が layout された次の render
     /// で一度だけ渡す。
@@ -424,6 +449,7 @@ impl FilerShell {
         // TSF preedit では provider を叩かない。確定 replacement が届いたイベントだけが
         // search request を作るので、IME中の候補移動を file-list のキーへ漏らさない。
         if search.input.read(cx).is_composing() {
+            cx.notify();
             return;
         }
         let query = search.input.read(cx).text().trim().to_owned();
@@ -554,12 +580,14 @@ impl FilerShell {
 
     pub(super) fn render_search_overlay(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let search = self.search.as_ref()?;
+        let palette = gpui_filer_ui::theme_palette(cx);
         let request_id = search.visible_request_id;
+        let placeholder = self
+            .translator
+            .text(super::i18n::Message::SearchTypeToSearch)
+            .into_owned();
         let status = match search.phase {
-            SearchPhase::Idle => self
-                .translator
-                .text(super::i18n::Message::SearchTypeToSearch)
-                .into_owned(),
+            SearchPhase::Idle => placeholder.clone(),
             SearchPhase::Loading => self
                 .translator
                 .text(super::i18n::Message::SearchSearching)
@@ -584,20 +612,31 @@ impl FilerShell {
             let path_text = result.path.display().to_string();
             let size = result.size.map(format_operation_bytes).unwrap_or_default();
             let activation_result = result.clone();
+            let icon = if result.is_folder {
+                IconId::FolderFallbackGlyph
+            } else {
+                IconId::File
+            };
             rows = rows.child(
                 div()
                     .id(("everything-result", index as u64))
                     .w_full()
-                    .min_h(px(44.0))
-                    .px(px(12.0))
-                    .py(px(5.0))
+                    .h(px(32.0))
+                    .flex_shrink_0()
+                    .px(px(8.0))
                     .flex()
                     .items_center()
-                    .gap(px(10.0))
-                    .when(selected, |row| {
-                        row.bg(gpui_filer_ui::theme_palette(cx).chrome_hover)
+                    .gap(px(8.0))
+                    .rounded(px(4.0))
+                    .cursor_pointer()
+                    .when(selected, |row| row.bg(palette.selection_bg))
+                    .hover(|row| {
+                        row.bg(if selected {
+                            palette.selection_bg
+                        } else {
+                            palette.hover_bg
+                        })
                     })
-                    .hover(|row| row.bg(gpui_filer_ui::theme_palette(cx).chrome_hover))
                     .on_click(
                         cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                             if event.standard_click() {
@@ -611,23 +650,32 @@ impl FilerShell {
                         }),
                     )
                     .child(
+                        div().flex_shrink_0().child(
+                            Icon::new(icon)
+                                .size(px(16.0))
+                                .color(palette.text_muted.into()),
+                        ),
+                    )
+                    .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .gap(px(2.0))
                             .child(
                                 div()
                                     .truncate()
-                                    .text_color(gpui_filer_ui::theme_palette(cx).text)
-                                    .child(result.name.clone()),
+                                    .text_size(px(14.0))
+                                    .line_height(px(16.0))
+                                    .text_color(palette.text)
+                                    .child(result.name),
                             )
                             .child(
                                 div()
                                     .truncate()
-                                    .text_size(px(11.0))
-                                    .text_color(gpui_filer_ui::theme_palette(cx).text_muted)
+                                    .text_size(px(12.0))
+                                    .line_height(px(14.0))
+                                    .text_color(palette.text_muted)
                                     .child(path_text),
                             ),
                     )
@@ -635,7 +683,8 @@ impl FilerShell {
                         row.child(
                             div()
                                 .flex_shrink_0()
-                                .text_color(gpui_filer_ui::theme_palette(cx).text_muted)
+                                .text_size(px(12.0))
+                                .text_color(palette.text_muted)
                                 .child(size),
                         )
                     }),
@@ -646,13 +695,12 @@ impl FilerShell {
         let results = if show_guidance {
             rows.child(
                 div()
-                    .px(px(14.0))
-                    .py(px(12.0))
+                    .p(px(8.0))
                     .flex()
                     .flex_col()
                     .gap(px(6.0))
                     .text_size(px(12.0))
-                    .text_color(gpui_filer_ui::theme_palette(cx).text_muted)
+                    .text_color(palette.text_muted)
                     .child(
                         self.translator
                             .text(super::i18n::Message::SearchUsage)
@@ -672,6 +720,8 @@ impl FilerShell {
         } else {
             rows
         };
+        let show_status =
+            search.phase != SearchPhase::Idle || !search.input.read(cx).text().is_empty();
         let input = search.input.clone();
         Some(
             div()
@@ -682,33 +732,33 @@ impl FilerShell {
                 // backdrop は click-through させない。閉じるのは Escape だけにして、
                 // result を選ぶ途中の誤クリックで query を失わないようにする。
                 .on_mouse_down(gpui::MouseButton::Left, |_event, _window, _cx| {})
-                .child(div().absolute().size_full().bg(gpui::rgba(0x00000088)))
+                .child(div().absolute().size_full().bg(gpui::black().opacity(0.32)))
                 .child(
                     div()
                         .size_full()
                         .flex()
                         .justify_center()
                         .items_start()
+                        .px(px(16.0))
                         .pt(px(72.0))
                         .child(
-                            div()
+                            search_card(palette)
                                 .id("everything-search-card")
-                                .w(px(640.0))
+                                .w_full()
                                 .max_w(px(640.0))
+                                .p(px(8.0))
                                 .flex()
                                 .flex_col()
-                                .overflow_hidden()
-                                .rounded(px(RADIUS_MD))
-                                .border_1()
-                                .border_color(gpui_filer_ui::theme_palette(cx).border)
-                                .bg(gpui_filer_ui::theme_palette(cx).surface_raised)
+                                .gap(px(8.0))
                                 .child(
                                     div()
-                                        .h(px(42.0))
-                                        .px(px(14.0))
+                                        .min_h(px(28.0))
+                                        .px(px(8.0))
                                         .flex()
                                         .items_center()
-                                        .text_color(gpui_filer_ui::theme_palette(cx).text)
+                                        .text_size(px(16.0))
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(palette.text)
                                         .child(
                                             self.translator
                                                 .text(super::i18n::Message::SearchTitle)
@@ -716,36 +766,29 @@ impl FilerShell {
                                         ),
                                 )
                                 .child(
-                                    div()
-                                        .mx(px(12.0))
-                                        .mb(px(8.0))
+                                    search_field(input, placeholder, cx)
                                         .h(px(42.0))
-                                        .px(px(10.0))
-                                        .flex()
-                                        .items_center()
-                                        .rounded(px(RADIUS_SM))
+                                        .px(px(18.0))
+                                        .rounded(px(8.0))
                                         .border_1()
-                                        .border_color(gpui_filer_ui::theme_palette(cx).border)
-                                        .text_color(gpui_filer_ui::theme_palette(cx).text)
-                                        .child(input),
+                                        .border_color(search_border(palette)),
                                 )
-                                .child(
-                                    div()
-                                        .h(px(28.0))
-                                        .px(px(14.0))
-                                        .flex()
-                                        .items_center()
-                                        .text_size(px(12.0))
-                                        .text_color(gpui_filer_ui::theme_palette(cx).text_muted)
-                                        .child(status),
-                                )
+                                .when(show_status, |card| {
+                                    card.child(
+                                        div()
+                                            .px(px(8.0))
+                                            .text_size(px(12.0))
+                                            .text_color(palette.text_muted)
+                                            .child(status),
+                                    )
+                                })
                                 .child(
                                     div()
                                         .id("everything-search-results")
                                         .max_h(px(352.0))
                                         .overflow_y_scroll()
                                         .border_t_1()
-                                        .border_color(gpui_filer_ui::theme_palette(cx).border)
+                                        .border_color(search_border(palette))
                                         .child(results),
                                 ),
                         ),

@@ -328,9 +328,6 @@ impl DirectoryListDemo {
                             .top_0()
                             .left_0()
                             .right(px(20.0))
-                            .bg(SURFACE_RAISED)
-                            .border_b_1()
-                            .border_color(BORDER)
                             .child(self.render_group(row, false, "sticky", cx))
                             .into_any_element(),
                     }

@@ -89,6 +89,24 @@ impl Bindings {
             .find(|binding| &binding.chord == chord && binding.when.matches(scopes))
     }
 
+    /// Find the first registered chord that actually resolves to this action.
+    pub fn key_for_action(
+        &self,
+        action: ActionId,
+        focus: &[ScopeId],
+        hover: Option<&[ScopeId]>,
+    ) -> Option<&KeyChord> {
+        self.keys.iter().find_map(|binding| {
+            if binding.action != action {
+                return None;
+            }
+            let resolved = self
+                .resolve(&binding.chord, focus)
+                .or_else(|| hover.and_then(|scopes| self.resolve(&binding.chord, scopes)))?;
+            std::ptr::eq(binding, resolved).then_some(&binding.chord)
+        })
+    }
+
     pub fn resolve_mouse(&self, chord: &MouseChord, scopes: &[ScopeId]) -> Option<&MouseBinding> {
         self.mouse
             .iter()
@@ -168,6 +186,39 @@ mod tests {
             .resolve(&chord("escape"), &[scope(1)])
             .expect("fallback binding");
         assert_eq!(fallback.action, ActionId::new("preview.close"));
+    }
+
+    #[test]
+    fn shortcut_lookup_preserves_registration_order_and_focus_precedence() {
+        let refresh = ActionId::new("file_view.refresh");
+        let other = ActionId::new("file_view.refresh_other");
+        let bindings = Bindings::new(
+            [
+                ("f7", other, Condition::Always),
+                ("f7", refresh, Condition::Always),
+                ("f9", refresh, Condition::Scope(scope(2))),
+                ("f9", other, Condition::Always),
+                ("f8", refresh, Condition::Scope(scope(2))),
+                ("f5", refresh, Condition::Always),
+            ]
+            .map(|(key, action, when)| KeyBinding {
+                chord: chord(key),
+                when,
+                action,
+            }),
+        );
+        assert_eq!(
+            bindings.key_for_action(refresh, &[scope(1)], Some(&[scope(1), scope(2)])),
+            Some(&chord("f8"))
+        );
+        assert_eq!(
+            bindings.key_for_action(refresh, &[scope(1)], None),
+            Some(&chord("f5"))
+        );
+        assert_eq!(
+            bindings.key_for_action(ActionId::new("file_view.ref"), &[], None),
+            None
+        );
     }
 
     #[test]

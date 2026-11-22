@@ -1,8 +1,9 @@
 use gpui::{
-    Context, Hsla, InteractiveElement as _, ParentElement as _, StatefulInteractiveElement as _,
-    Styled as _, div, prelude::FluentBuilder as _, px, rgb,
+    Context, InteractiveElement as _, ParentElement as _, StatefulInteractiveElement as _,
+    Styled as _, div, prelude::FluentBuilder as _, px,
 };
-use gpui_filer_ui::RADIUS_SM;
+use gpui_filer_resources::IconId;
+use gpui_filer_ui::{Icon, RADIUS_SM};
 
 use super::{
     DirectoryEvent, DirectoryListDemo, GroupBy, ICON_SCALE_MAX, ICON_SCALE_MIN, ICON_SCALE_STEP,
@@ -102,12 +103,11 @@ impl DirectoryListDemo {
             }))
     }
 
-    /// タイル・アイコンビューのアイコンサイズを段階的に変える −/+ コントロール。
+    /// タイル・アイコンビューのアイコンサイズを段階的に変える。
     pub(super) fn render_icon_scale(&self, cx: &mut Context<Self>) -> gpui::Div {
         let palette = gpui_filer_ui::theme_palette(cx);
         let can_shrink = self.icon_scale > ICON_SCALE_MIN + 0.01;
         let can_grow = self.icon_scale < ICON_SCALE_MAX - 0.01;
-        let dim: Hsla = rgb(0x555555).into();
         div()
             .flex()
             .items_center()
@@ -120,9 +120,14 @@ impl DirectoryListDemo {
                     .items_center()
                     .justify_center()
                     .rounded(px(4.0))
-                    .when(can_shrink, |b| b.hover(|s| s.bg(palette.border)))
-                    .when(!can_shrink, |b| b.text_color(dim))
-                    .child("-")
+                    .when(can_shrink, |b| {
+                        b.cursor_pointer().hover(|s| s.bg(palette.border))
+                    })
+                    .child(Icon::new(IconId::ZoomOut).color(if can_shrink {
+                        palette.text.into()
+                    } else {
+                        palette.text_muted.into()
+                    }))
                     .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
                         if event.standard_click() && this.icon_scale > ICON_SCALE_MIN + 0.01 {
                             this.icon_scale =
@@ -142,9 +147,14 @@ impl DirectoryListDemo {
                     .items_center()
                     .justify_center()
                     .rounded(px(4.0))
-                    .when(can_grow, |b| b.hover(|s| s.bg(palette.border)))
-                    .when(!can_grow, |b| b.text_color(dim))
-                    .child("+")
+                    .when(can_grow, |b| {
+                        b.cursor_pointer().hover(|s| s.bg(palette.border))
+                    })
+                    .child(Icon::new(IconId::ZoomIn).color(if can_grow {
+                        palette.text.into()
+                    } else {
+                        palette.text_muted.into()
+                    }))
                     .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
                         if event.standard_click() && this.icon_scale < ICON_SCALE_MAX - 0.01 {
                             this.icon_scale =

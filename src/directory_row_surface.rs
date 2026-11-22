@@ -1,6 +1,213 @@
 use super::*;
+use std::ops::Range;
+
+struct RowNameTooltip(SharedString);
+
+fn quick_search_match_range(name: &str, needle: &str) -> Option<Range<usize>> {
+    let match_start = name.to_lowercase().find(needle)?;
+    let match_end = match_start + needle.len();
+    let mut lower_offset = 0;
+    let mut start = None;
+    // 小文字化で長さが変わる文字がある。照合位置を元の UTF-8 文字の境界へ戻す。
+    for (offset, ch) in name.char_indices() {
+        lower_offset += ch.to_lowercase().map(char::len_utf8).sum::<usize>();
+        if lower_offset > match_start {
+            let start = *start.get_or_insert(offset);
+            if lower_offset >= match_end {
+                return Some(start..offset + ch.len_utf8());
+            }
+        }
+    }
+    None
+}
+
+impl Render for RowNameTooltip {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = gpui_filer_ui::theme_palette(cx);
+        div()
+            .max_w(px(480.0))
+            .px(px(CELL_PADDING_X))
+            .py(px(CELL_PADDING_Y))
+            .rounded(px(RADIUS_SM))
+            .border_1()
+            .border_color(palette.border)
+            .bg(palette.surface_raised)
+            .text_color(palette.text)
+            .text_size(px(NAME_FONT_SIZE))
+            .line_height(px(NAME_LINE_HEIGHT))
+            .whitespace_normal()
+            .child(self.0.clone())
+    }
+}
+
+fn filename_with_tooltip(
+    id: (&'static str, usize),
+    text: gpui::StyledText,
+    full_name: SharedString,
+    view: gpui::WeakEntity<DirectoryListDemo>,
+) -> gpui::InteractiveText {
+    gpui::InteractiveText::new(id, text).tooltip(move |_, _, cx| {
+        view.read_with(cx, |this, _| this.interaction.hover_enabled())
+            .ok()
+            .filter(|hover_enabled| *hover_enabled)
+            .map(|_| cx.new(|_| RowNameTooltip(full_name.clone())).into())
+    })
+}
+
+fn filename_extension_start(name: &str) -> usize {
+    name.rfind('.')
+        .filter(|&dot| dot > 0 && dot + 1 < name.len())
+        .unwrap_or(name.len())
+}
+
+fn filename_break(name: &str, stem_end: usize, fits: impl Fn(&str) -> bool) -> usize {
+    if fits(name) {
+        return name.len();
+    }
+
+    // 最後のピリオドは拡張子に含め、途中のピリオドだけを区切り候補にする。
+    let boundaries: Vec<_> = name[..stem_end]
+        .char_indices()
+        .map(|(offset, ch)| (offset + ch.len_utf8(), ch))
+        .collect();
+    let fitted = boundaries.partition_point(|&(end, _)| fits(&name[..end]));
+    let Some(&(last_fit, _)) = boundaries[..fitted].last() else {
+        return 0;
+    };
+    let preferred = boundaries[..fitted]
+        .iter()
+        .rfind(|&&(end, ch)| {
+            matches!(ch, '-' | '_' | ' ')
+                || (ch == '.' && end > 1)
+                || matches!(ch as u32,
+                    0x1100..=0x11FF | 0x3040..=0x30FF | 0x3100..=0x318F
+                    | 0x31A0..=0x31BF | 0x31F0..=0x31FF | 0x3400..=0x9FFF
+                    | 0xA960..=0xA97F | 0xAC00..=0xD7FF | 0xF900..=0xFAFF
+                    | 0xFF66..=0xFF9D | 0x1AFF0..=0x1B16F | 0x20000..=0x323AF)
+        })
+        .map_or(last_fit, |&(end, _)| end);
+    if preferred != last_fit && !fits(&name[preferred..]) && fits(&name[last_fit..]) {
+        // 区切り位置を優先しつつ、二行で名前全体が見える場合は省略を避ける。
+        return last_fit;
+    }
+    preferred
+}
+
+#[derive(IntoElement)]
+struct GridFilename {
+    full_name: SharedString,
+    width: Pixels,
+    highlight: Option<(Range<usize>, Hsla)>,
+    tooltip: Option<(usize, gpui::WeakEntity<DirectoryListDemo>)>,
+}
+
+impl GridFilename {
+    fn runs(&self, range: Range<usize>, style: &gpui::TextStyle) -> Vec<gpui::TextRun> {
+        let Some((matched, color)) = &self.highlight else {
+            return vec![style.to_run(range.len())];
+        };
+        let start = range.start.max(matched.start);
+        let end = range.end.min(matched.end);
+        if start >= end {
+            return vec![style.to_run(range.len())];
+        }
+        let mut highlight = style.to_run(end - start);
+        highlight.background_color = Some(*color);
+        vec![
+            style.to_run(start - range.start),
+            highlight,
+            style.to_run(range.end - end),
+        ]
+    }
+
+    fn text(&self, window: &Window, cx: &App) -> gpui::StyledText {
+        let name = self.full_name.replace(['\r', '\n'], " ");
+        let style = window.text_style();
+        let font_size = px(NAME_FONT_SIZE);
+        let measure = |text: &str| {
+            window
+                .text_system()
+                .layout_line(text, font_size, &[style.to_run(text.len())], None)
+                .width
+        };
+        let fits = |text: &str| measure(text) <= self.width;
+        let stem_end = filename_extension_start(&name);
+        let split = filename_break(&name, stem_end, fits);
+        let tail = &name[split..];
+        let mut text = name[..split].to_owned();
+        let mut runs = self.runs(0..split, &style);
+        if !text.is_empty() && !tail.is_empty() {
+            text.push('\n');
+            runs.push(style.to_run(1));
+        }
+        if fits(tail) {
+            text.push_str(tail);
+            runs.extend(self.runs(split..name.len(), &style));
+        } else {
+            let extension = &name[stem_end..];
+            let extension_width = measure(extension);
+            // Rows と同じ GPUI の中央省略を使う。拡張子は収まる限り先に幅を確保する。
+            let keep_extension =
+                !extension.is_empty() && measure("…") + extension_width <= self.width;
+            let end = if keep_extension { stem_end } else { name.len() };
+            let target_width = if keep_extension {
+                self.width - extension_width
+            } else {
+                self.width
+            };
+            let tail_runs = self.runs(split..end, &style);
+            let (shortened, shortened_runs) = cx
+                .text_system()
+                .line_wrapper(style.font(), font_size)
+                .truncate_line(
+                    name[split..end].into(),
+                    target_width,
+                    "…",
+                    &tail_runs,
+                    gpui::TruncateFrom::Middle,
+                );
+            text.push_str(&shortened);
+            runs.extend(shortened_runs.iter().cloned());
+            if keep_extension {
+                text.push_str(extension);
+                runs.extend(self.runs(stem_end..name.len(), &style));
+            }
+        }
+        runs.retain(|run| run.len > 0);
+        gpui::StyledText::new(text).with_runs(runs)
+    }
+}
+
+impl gpui::RenderOnce for GridFilename {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let text = self.text(window, cx);
+        div()
+            .max_w(self.width)
+            .max_h(px(NAME_LINE_HEIGHT * 2.0))
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .child(match self.tooltip {
+                Some((index, view)) => {
+                    filename_with_tooltip(("grid-filename", index), text, self.full_name, view)
+                        .into_any_element()
+                }
+                None => text.into_any_element(),
+            })
+    }
+}
 
 impl DirectoryListDemo {
+    fn quick_search_highlight(&self, name: &str, cx: &App) -> Option<(Range<usize>, Hsla)> {
+        let range = self
+            .quick_search
+            .as_ref()
+            .filter(|session| !session.needle.is_empty())
+            .and_then(|session| quick_search_match_range(name, &session.needle))?;
+        let palette = gpui_filer_ui::theme_palette(cx);
+        let highlight = palette.surface_raised.blend(palette.text.opacity(0.22));
+        Some((range, highlight.into()))
+    }
+
     fn render_inline_rename_input(
         &self,
         index: usize,
@@ -127,7 +334,7 @@ impl DirectoryListDemo {
                 .flex_shrink_0()
                 .into_any_element()
         } else {
-            // グリッドは箱を自分の内容側へ寄せる。行は左端に隣が無いので中央のまま。
+            // タイルでは、箱を隣のアイコンへ寄せる。
             let checkbox = SelectionCheckbox::new(
                 format!("select-{index}-visibility-{item_check_boxes_revision}"),
                 self.selection.contains(index),
@@ -151,13 +358,13 @@ impl DirectoryListDemo {
                     cx.notify();
                 }),
             );
-            if self.layout == ViewLayout::Rows {
-                checkbox.into_any_element()
-            } else {
+            if self.layout == ViewLayout::Tiles {
                 checkbox.trailing().into_any_element()
+            } else {
+                checkbox.into_any_element()
             }
         };
-        let checkbox = if self.item_check_boxes && !measuring {
+        let checkbox = if self.item_check_boxes && !measuring && self.layout != ViewLayout::Icons {
             self.checkbox_surface(index, checkbox)
         } else {
             checkbox
@@ -501,41 +708,68 @@ impl DirectoryListDemo {
                 });
         }
         if self.layout == ViewLayout::Rows {
+            let column_prefs = self.effective_column_prefs();
+            let columns = self.row_columns_for_width(self.layout_width, column_prefs);
             let details = self
                 .row_details
                 .get(&entry.key)
                 .expect("detail cache is rebuilt with the entry projection");
-            let mut name_text = div().min_w_0().flex_1().w_full().overflow_hidden().child(
-                if let Some(input) = rename_input.clone() {
-                    self.render_inline_rename_input(index, input, cx)
+            let label = if let Some(input) = rename_input {
+                self.render_inline_rename_input(index, input, cx)
+            } else {
+                let full_name: SharedString = display_name.into();
+                // Nowrap は明示的な改行を消さない。表示だけを一行にし、tooltip には元の名前を渡す。
+                let label: SharedString = if full_name.contains(['\r', '\n']) {
+                    full_name.replace(['\r', '\n'], " ").into()
                 } else {
-                    div().child(display_name.clone()).into_any_element()
-                },
-            );
+                    full_name.clone()
+                };
+                let line = div()
+                    .w_full()
+                    .h(px(NAME_LINE_HEIGHT))
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis_middle();
+                if measuring {
+                    line.child(label).into_any_element()
+                } else {
+                    let mut text = gpui::StyledText::new(label);
+                    if let Some((range, color)) = self.quick_search_highlight(&full_name, cx) {
+                        text = text.with_highlights([(
+                            range,
+                            gpui::HighlightStyle {
+                                background_color: Some(color),
+                                ..Default::default()
+                            },
+                        )]);
+                    }
+                    line.child(filename_with_tooltip(
+                        ("row-filename", index),
+                        text,
+                        full_name,
+                        cx.entity().downgrade(),
+                    ))
+                    .into_any_element()
+                }
+            };
+            let mut name_text = div().min_w_0().flex_1().overflow_hidden().child(label);
             if cut_marked {
                 name_text = name_text.opacity(0.5);
             }
             let mut name = div()
                 .relative()
-                .min_w(px(rows_layout::project_columns(
-                    self.layout_width,
-                    self.effective_column_prefs(),
-                )
-                .name_width))
-                .min_h(px(44.0))
-                // 同じ仮想行にある cell は高さを共有するが、選択背景を持つ name
-                // surface まで stretch すると、折返し内容より大きな青い面になる。
-                // 横幅だけは flex で受け、縦方向は editor の内容高を保つ。
+                .w(px(columns.name_width))
+                .flex_shrink_0()
+                .min_h(px(ESTIMATED_ROW_HEIGHT))
+                .when(!renaming, |name| name.h(px(ESTIMATED_ROW_HEIGHT)))
+                // 名前変更中だけ入力欄の折り返し高を行に反映する。
                 .self_start()
-                .flex_1()
                 .px(px(CELL_PADDING_X))
                 .py(px(CELL_PADDING_Y))
                 .flex()
                 .items_center()
                 .gap(px(CELL_GAP))
                 .overflow_hidden()
-                // タイル・アイコンの名前ラベルと同じ角丸にする。
-                .rounded(px(RADIUS_SM))
                 .child(if measuring {
                     div().size(px(20.0)).flex_shrink_0().into_any_element()
                 } else if is_shortcut_file(entry) {
@@ -586,55 +820,153 @@ impl DirectoryListDemo {
                     ));
                 }
             }
-            let name = self.item_surface(index, "row-name", name, measuring, cx);
-            let column_prefs = self.effective_column_prefs();
-            let mut kind_cell =
-                rows_layout::detail_cell(details.kind.clone(), column_prefs.kind_width);
-            let mut size_cell =
-                rows_layout::detail_cell(details.size.clone(), column_prefs.size_width)
-                    .text_right();
-            let mut modified_cell =
-                rows_layout::detail_cell(details.modified.clone(), column_prefs.modified_width);
-            if cut_marked {
-                kind_cell = kind_cell.opacity(0.5);
-                size_cell = size_cell.opacity(0.5);
-                modified_cell = modified_cell.opacity(0.5);
-            }
-            let columns = self.row_columns_for_width(self.layout_width, column_prefs);
-            let mut ordered_cells = Vec::with_capacity(7);
-            let mut name = Some(name.into_any_element());
-            let mut kind_cell = Some(kind_cell.into_any_element());
-            let mut size_cell = Some(size_cell.into_any_element());
-            let mut modified_cell = Some(modified_cell.into_any_element());
-            for column in columns.order {
-                let visible = match column {
-                    Column::Name => true,
-                    Column::Kind => columns.kind,
-                    Column::Size => columns.size,
-                    Column::Modified => columns.modified,
+            let mut leading = div()
+                .self_stretch()
+                .flex()
+                .items_center()
+                .flex_shrink_0()
+                .pl(px(ROW_PADDING_X))
+                .child(checkbox);
+            let mut trailing = div()
+                .self_stretch()
+                .flex()
+                .items_center()
+                .flex_1()
+                .min_w_0()
+                .pr(px(ROW_PADDING_X));
+            // Name の選択面と左右を塗り分け、半透明テーマでも同じ色が二重に重ならないようにする。
+            if !measuring {
+                let selected = self.selection.rectangle_contains(
+                    index,
+                    self.rectangle_drag
+                        .as_ref()
+                        .and_then(|drag| self.rectangle_content_rect(drag))
+                        .is_some_and(|rectangle| self.item_intersects_rectangle(index, rectangle)),
+                );
+                let focused =
+                    self.selection.is_selection_mode() && self.selection.focused() == Some(index);
+                let hovered = self.interaction.hover_enabled()
+                    && self
+                        .hovered_item_part
+                        .is_some_and(|(item, _)| item == index);
+                let palette = gpui_filer_ui::theme_palette(cx);
+                let hover_color = if selected {
+                    palette.selection_hover_bg
+                } else {
+                    palette.hover_bg
                 };
-                if !visible {
-                    continue;
-                }
-                if !ordered_cells.is_empty() {
-                    ordered_cells.push(rows_layout::column_divider().into_any_element());
-                }
-                ordered_cells.push(match column {
-                    Column::Name => name.take().unwrap(),
-                    Column::Kind => kind_cell.take().unwrap(),
-                    Column::Size => size_cell.take().unwrap(),
-                    Column::Modified => modified_cell.take().unwrap(),
-                });
+                let color = match (hovered, selected, focused) {
+                    (true, _, _) => Some(hover_color),
+                    (_, true, true) => Some(palette.selection_focus_bg),
+                    (_, true, false) => Some(palette.selection_bg),
+                    (_, false, true) => Some(palette.focus_bg),
+                    _ => None,
+                };
+                let paint_side = |side: gpui::Div| {
+                    side.when_some(color, |side, color| side.bg(color))
+                        .group_hover(folder_tree_group.clone(), |side| side.bg(hover_color))
+                };
+                leading = paint_side(leading);
+                trailing = paint_side(trailing);
+                name = name.group_hover(folder_tree_group, |name| name.bg(hover_color));
             }
+            let mut past_name = false;
+            for (position, column) in columns.visible_columns().enumerate() {
+                let side = if past_name {
+                    &mut trailing
+                } else {
+                    &mut leading
+                };
+                if position > 0 {
+                    side.extend([rows_layout::column_spacing().into_any_element()]);
+                }
+                let detail = match column {
+                    Column::Name => {
+                        past_name = true;
+                        continue;
+                    }
+                    Column::Kind => rows_layout::detail_cell(
+                        details.kind.clone(),
+                        column_prefs.kind_width,
+                    ),
+                    Column::Size => {
+                        rows_layout::detail_cell(details.size.clone(), column_prefs.size_width)
+                            .text_right()
+                    }
+                    Column::Modified => rows_layout::detail_cell(
+                        details.modified.clone(),
+                        column_prefs.modified_width,
+                    ),
+                };
+                side.extend([detail
+                    .when(cut_marked, |detail| detail.opacity(0.5))
+                    .into_any_element()]);
+            }
+            let name = self.item_surface(index, "row-name", name, measuring, cx);
             let row = base
-                .px(px(ROW_PADDING_X))
-                .child(checkbox)
-                .children(ordered_cells);
+                .overflow_hidden()
+                .when(!renaming, |row| row.h(px(ESTIMATED_ROW_HEIGHT)))
+                .child(leading)
+                .child(name)
+                .child(trailing);
             return row.into_any_element();
         }
 
         let icons = self.layout == ViewLayout::Icons;
+        if !measuring {
+            let palette = gpui_filer_ui::theme_palette(cx);
+            let selected = self.selection.rectangle_contains(
+                index,
+                self.rectangle_drag
+                    .as_ref()
+                    .and_then(|drag| self.rectangle_content_rect(drag))
+                    .is_some_and(|rectangle| self.item_intersects_rectangle(index, rectangle)),
+            );
+            let keyboard_focused = self.interaction.last_device() == InputDevice::Keyboard
+                && self.selection.focused() == Some(index)
+                && !renaming;
+            let selection_alpha = if Hsla::from(palette.surface_base).l < 0.5 {
+                0.24
+            } else {
+                0.15
+            };
+            let radius = px(8.0);
+            // 枠を絶対配置し、選択やフォーカスが変わっても項目の計測値を保つ。
+            base = base
+                .relative()
+                .rounded(radius)
+                .when(selected, |card| {
+                    card.bg(palette.accent.opacity(selection_alpha)).child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .rounded(radius)
+                            .border_1()
+                            .border_color(palette.accent),
+                    )
+                })
+                .when(self.interaction.hover_enabled(), |card| {
+                    card.hover(move |style| {
+                        style.bg(if selected {
+                            palette.accent.opacity(selection_alpha + 0.04).into()
+                        } else {
+                            foreground.opacity(0.07)
+                        })
+                    })
+                })
+                .when(keyboard_focused, |card| {
+                    card.child(
+                        div()
+                            .absolute()
+                            .inset(px(2.0))
+                            .rounded(px(6.0))
+                            .border_2()
+                            .border_color(palette.accent),
+                    )
+                });
+        }
         let icon_size = self.layout.icon_size(self.icon_scale);
+        let icon_box = self.layout.icon_container(self.icon_scale);
         let is_ico = is_ico_file(entry);
         let preview_reason = if measuring || self.layout == ViewLayout::Rows || is_ico {
             None
@@ -658,24 +990,24 @@ impl DirectoryListDemo {
                 }
             })
         };
-        let preview_reason_label = preview_reason.map(|reason| {
-            self.translator
-                .text(match reason {
-                    thumbnails::PreviewFailureReason::Unsupported => {
-                        Message::ThumbnailGenerationUnavailable
-                    }
-                    thumbnails::PreviewFailureReason::ProcessingFailed => {
-                        Message::ThumbnailProcessingFailed
-                    }
-                    thumbnails::PreviewFailureReason::FolderUnavailable => {
-                        Message::ThumbnailFolderUnavailable
-                    }
-                    thumbnails::PreviewFailureReason::FolderNoPreview => {
-                        Message::ThumbnailFolderNoPreview
-                    }
-                })
-                .into_owned()
-        });
+        let preview_reason_label = preview_reason
+            .map(|reason| match reason {
+                thumbnails::PreviewFailureReason::Unsupported => {
+                    Message::ThumbnailGenerationUnavailable
+                }
+                thumbnails::PreviewFailureReason::ProcessingFailed => {
+                    Message::ThumbnailProcessingFailed
+                }
+                thumbnails::PreviewFailureReason::FolderUnavailable => {
+                    Message::ThumbnailFolderUnavailable
+                }
+                thumbnails::PreviewFailureReason::FolderNoPreview => {
+                    Message::ThumbnailFolderNoPreview
+                }
+            })
+            // 見本の候補がないフォルダーは、通常のフォルダーアイコンだけで示す。
+            .filter(|message| *message != Message::ThumbnailFolderNoPreview)
+            .map(|message| self.translator.text(message).into_owned());
         let shell_visual = shell_icon_image.as_ref().map(|image| {
             gpui::img(image.clone())
                 .size(px(icon_size))
@@ -722,7 +1054,7 @@ impl DirectoryListDemo {
         };
         let visual_surface = div()
             .relative()
-            .size(px(icon_size + 16.0))
+            .size(px(icon_box))
             .flex_shrink_0()
             .flex()
             .items_center()
@@ -734,7 +1066,7 @@ impl DirectoryListDemo {
             .when(!measuring && is_shortcut_file(entry), |surface| {
                 surface.child(shortcut_badge(
                     icon_size,
-                    8.0,
+                    (icon_box - icon_size) / 2.0,
                     self.shortcut_is_broken(entry),
                 ))
             })
@@ -752,6 +1084,7 @@ impl DirectoryListDemo {
                         .text_color(gpui_filer_ui::theme_palette(cx).text_muted)
                         .text_size(px(10.0))
                         .line_height(px(12.0))
+                        .text_center()
                         .overflow_hidden()
                         .text_ellipsis()
                         .child(label),
@@ -762,7 +1095,7 @@ impl DirectoryListDemo {
         // 重ねる。見た目の anchor は icon surface の右下のまま、menu button だけが先に受ける。
         let mut icon_with_anchor = div()
             .relative()
-            .size(px(icon_size + 16.0))
+            .size(px(icon_box))
             .flex_shrink_0()
             .child(icon);
         if !measuring
@@ -789,10 +1122,14 @@ impl DirectoryListDemo {
             .when(renaming && icons, |label| label.w_full())
             .when(renaming && !icons, |label| label.flex_1())
             .min_h(px(44.0))
-            .px(px(6.0))
-            .py(px(4.0))
+            .px(px(GRID_NAME_PADDING_X))
             .flex()
-            .items_center()
+            .when(icons && !renaming, |label| {
+                label.items_start().pb(px(CELL_PADDING_Y * 2.0))
+            })
+            .when(!icons || renaming, |label| {
+                label.items_center().py(px(CELL_PADDING_Y))
+            })
             .rounded(px(RADIUS_SM))
             .overflow_hidden()
             .when(icons, |label| label.text_center())
@@ -800,13 +1137,23 @@ impl DirectoryListDemo {
                 if let Some(input) = rename_input {
                     self.render_inline_rename_input(index, input, cx)
                 } else {
-                    div().child(display_name).into_any_element()
+                    GridFilename {
+                        highlight: if measuring {
+                            None
+                        } else {
+                            self.quick_search_highlight(&display_name, cx)
+                        },
+                        full_name: display_name.into(),
+                        width: px(self.item_name_text_width(self.layout_width)),
+                        tooltip: (!measuring).then(|| (index, cx.entity().downgrade())),
+                    }
+                    .into_any_element()
                 },
             ));
         if cut_marked {
             // Cut の状態は名前だけ薄くし、FolderPreview / Fluent icon の表面は
             // 見えるままにする。親カードへ opacity を掛けると、画像の内容まで透ける。
-            label_content = label_content.opacity(0.5);
+            label_content = label_content.opacity(0.85);
         }
         if !measuring
             && self.layout == ViewLayout::Rows
@@ -825,34 +1172,39 @@ impl DirectoryListDemo {
         }
         let label = self.item_surface(index, "name", label_content, measuring, cx);
         if icons {
-            // 箱を icon の左隣へ寄せ、反対側に同幅の空きを置く。
-            // こうすると icon と名前の中心はセル中央のまま揃い、箱だけが自分の内容へ付く。
-            let icon_row = div()
-                .flex()
-                .items_center()
-                .gap(px(if self.item_check_boxes {
-                    CHECKBOX_GAP
-                } else {
-                    0.0
-                }))
-                .child(checkbox)
-                .child(icon_with_anchor)
-                .when(self.item_check_boxes, |row| {
-                    row.child(
-                        div()
-                            .w(px(gpui_filer_ui::CHECKBOX_HIT_SIZE))
-                            .flex_shrink_0(),
-                    )
+            if self.item_check_boxes && !measuring {
+                let bounds = Rc::new(RefCell::new(None));
+                if let Some(geometry) = self.item_menu_geometry.borrow_mut().as_mut() {
+                    geometry.surfaces.push(ItemMenuSurfaceBounds {
+                        key: entry.key.clone(),
+                        part: ItemMenuSurfacePart::Checkbox,
+                        bounds: bounds.clone(),
+                    });
+                    geometry.occluding_surfaces.push(bounds.clone());
+                }
+                // 44pxのhit領域を左へ逃がし、最小ズームでもアイコン中央を操作できる。
+                let overlay = div()
+                    .absolute()
+                    .left(px(-ICON_CHECKBOX_OVERHANG))
+                    .top_0()
+                    .size(px(gpui_filer_ui::CHECKBOX_HIT_SIZE))
+                    .block_mouse_except_scroll()
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(checkbox);
+                icon_with_anchor = icon_with_anchor.child(BoundsCapture {
+                    child: overlay.into_any_element(),
+                    bounds,
                 });
+            }
             base.flex_col()
-                .gap(px(8.0))
-                .child(icon_row)
+                .gap(px(ICON_NAME_GAP))
+                .child(icon_with_anchor)
                 .child(label)
                 .into_any_element()
         } else {
             // カード全体にはhit領域を置かず、checkbox・icon・名前だけが選択を受ける。
-            base.gap(px(if self.item_check_boxes { 8.0 } else { 0.0 }))
-                .child(checkbox)
+            base.gap(px(TILE_ITEM_GAP))
+                .when(self.item_check_boxes, |tile| tile.child(checkbox))
                 .child(icon_with_anchor)
                 .child(label)
                 .into_any_element()
@@ -989,27 +1341,44 @@ impl DirectoryListDemo {
                     })
                 },
             )
+            .compact()
             .indeterminate(state == RangeSelectionState::Some);
             let focused = matches!(self.selection.focus_target(), Some(FocusTarget::Section(focused)) if focused == &key);
+            let palette = gpui_filer_ui::theme_palette(cx);
             let heading = div()
                 .id(format!("{id_scope}-section-heading-{row}"))
+                .relative()
                 .w_full()
-                // hit 領域が 44px の checkbox を header の高さより大きくすると、flex の
-                // baseline から上にはみ出して見える。見出し側も同じ高さにし、文字と箱を
-                // 一つの中心線へ揃える。
-                .h(px(gpui_filer_ui::CHECKBOX_HIT_SIZE))
+                .h(px(gpui_filer_ui::CHECKBOX_COMPACT_HEIGHT))
+                .flex_shrink_0()
                 .px(px(12.0))
                 .flex()
                 .items_center()
-                .when(focused, |heading| {
-                    heading
-                        .border_1()
-                        .border_color(gpui::hsla(0.58, 0.25, 0.62, 0.8))
-                })
-                .text_size(px(14.0))
                 .gap(px(8.0))
+                .bg(palette.surface_base.blend(palette.text.opacity(0.045)))
+                // 罫線とフォーカス枠は checkbox の高さと行測定を変えない。
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .border_t_1()
+                        .border_color(palette.text.opacity(0.14))
+                        .when(focused, |outline| {
+                            outline
+                                .border_1()
+                                .border_color(gpui::hsla(0.58, 0.25, 0.62, 0.8))
+                        }),
+                )
+                .text_size(px(12.0))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(palette.text_muted)
                 .child(checkbox)
-                .child(label.clone());
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .child(format!("{label} ({})", end - start)),
+                );
             return if measuring {
                 heading
             } else {

@@ -1808,6 +1808,13 @@ impl OperationRuntime {
         self.service.progress_rows()
     }
 
+    pub(crate) fn current_terminal_receipts(
+        &self,
+        token: AttemptToken,
+    ) -> Option<&[super::model::ItemReceipt]> {
+        self.service.current_terminal_receipts(token)
+    }
+
     pub fn has_progress_rows(&self) -> bool {
         self.service.has_progress_rows()
     }

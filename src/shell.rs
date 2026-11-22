@@ -614,6 +614,7 @@ impl Default for PaneTabPresentation {
 /// Workspace owns pane contents/focus and the tree that determines spatial layout.
 struct Workspace {
     name: String,
+    default_name_number: Option<std::num::NonZeroUsize>,
     pane_layout: PaneLayoutNode,
     panes: Vec<WorkspacePane>,
     job_progress: Option<JobProgressPane>,
@@ -626,6 +627,7 @@ impl Workspace {
     fn single_pane() -> Self {
         Self {
             name: "Workspace 1".into(),
+            default_name_number: std::num::NonZeroUsize::new(1),
             pane_layout: PaneLayoutNode::single(PaneId(1)),
             panes: vec![WorkspacePane {
                 id: PaneId(1),
@@ -8923,7 +8925,9 @@ impl FilerShell {
             *id = saved_workspace_id;
         }
         self.workspace.active = saved_workspace_id;
-        self.workspace.active_mut().name = saved_workspace.name.clone();
+        let workspace = self.workspace.active_mut();
+        workspace.name = saved_workspace.name.clone();
+        workspace.default_name_number = saved_workspace.default_name_number;
         let mut restored: Vec<_> = saved_workspace
             .panes
             .iter()
@@ -12001,11 +12005,275 @@ impl FilerShell {
         viewport_size: gpui::Size<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
-        if !self.quick_preview.is_open() {
-            return None;
-        }
+        let filename = self.quick_preview.file_name()?;
         let content = self.quick_preview.content();
         let text_scroll = self.quick_preview.text_scroll().clone();
+        let palette = gpui_filer_ui::theme_palette(cx);
+        let header = div()
+            .h(px(44.0))
+            .flex_shrink_0()
+            .pl(px(16.0))
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .text_size(px(14.0))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .child(div().flex_1().min_w_0().truncate().child(filename))
+            .child(
+                div()
+                    .id("quick-preview-close")
+                    .size(px(44.0))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(palette.chrome_hover_strong))
+                    .child(
+                        Icon::new(IconId::Close)
+                            .size(px(16.0))
+                            .color(palette.text.into()),
+                    )
+                    .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
+                        if event.standard_click() {
+                            this.quick_preview.close();
+                            cx.stop_propagation();
+                            cx.notify();
+                        }
+                    })),
+            );
+        let frame = div()
+            .w(relative(0.84))
+            .h(relative(0.84))
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .rounded(px(10.0))
+            .border_1()
+            .border_color(palette.text.opacity(0.14))
+            .bg(palette.surface_raised)
+            .text_color(palette.text)
+            .child(header)
+            .when_some(content, |frame, content| {
+                let body = match content {
+                    quick_preview::Content::Loading => div()
+                        .child(
+                            self.translator
+                                .text(Message::QuickPreviewLoading)
+                                .into_owned(),
+                        )
+                        .into_any_element(),
+                    quick_preview::Content::Failed => div()
+                        .child(
+                            self.translator
+                                .text(Message::QuickPreviewFailed)
+                                .into_owned(),
+                        )
+                        .into_any_element(),
+                    quick_preview::Content::Generic(icon) => div()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(px(12.0))
+                        .child(Icon::new(icon).size(px(96.0)).color(palette.text.into()))
+                        .child(
+                            self.translator
+                                .text(Message::QuickPreviewFallback)
+                                .into_owned(),
+                        )
+                        .into_any_element(),
+                    quick_preview::Content::Image(image) => div()
+                        .size_full()
+                        .p(px(16.0))
+                        .child(
+                            gpui::img(image)
+                                .size_full()
+                                .object_fit(gpui::ObjectFit::ScaleDown),
+                        )
+                        .into_any_element(),
+                    quick_preview::Content::Video(preview) => {
+                        let duration = preview.duration_seconds.map_or_else(
+                            || "-".to_owned(),
+                            |seconds| {
+                                let total = seconds.max(0.0).round() as u64;
+                                let hours = total / 3600;
+                                let minutes = (total % 3600) / 60;
+                                let seconds = total % 60;
+                                if hours > 0 {
+                                    format!("{hours}:{minutes:02}:{seconds:02}")
+                                } else {
+                                    format!("{minutes}:{seconds:02}")
+                                }
+                            },
+                        );
+                        let dimensions = match (preview.width, preview.height) {
+                            (Some(width), Some(height)) => format!("{width} × {height}"),
+                            _ => "-".to_owned(),
+                        };
+                        let size = format_operation_bytes(preview.file_size);
+                        let metadata = format!(
+                            "{}: {}  ·  {}: {}  ·  {}: {}",
+                            self.translator.text(Message::QuickPreviewDuration),
+                            duration,
+                            self.translator.text(Message::QuickPreviewDimensions),
+                            dimensions,
+                            self.translator.text(Message::QuickPreviewSize),
+                            size,
+                        );
+                        let frame = preview.frame.map_or_else(
+                            || {
+                                div()
+                                    .child(
+                                        self.translator
+                                            .text(Message::QuickPreviewFailed)
+                                            .into_owned(),
+                                    )
+                                    .into_any_element()
+                            },
+                            |image| {
+                                gpui::img(image)
+                                    .size_full()
+                                    .object_fit(gpui::ObjectFit::ScaleDown)
+                                    .into_any_element()
+                            },
+                        );
+                        div()
+                            .size_full()
+                            .min_h_0()
+                            .p(px(16.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(12.0))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(frame),
+                            )
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_center()
+                                    .text_size(px(12.0))
+                                    .text_color(palette.text_muted)
+                                    .child(metadata),
+                            )
+                            .into_any_element()
+                    }
+                    quick_preview::Content::FolderPreview(images) => {
+                        let preview_size = (viewport_size
+                            .width
+                            .as_f32()
+                            .min(viewport_size.height.as_f32())
+                            * 0.48)
+                            .clamp(96.0, 480.0);
+                        let mut preview = div()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap(px(16.0))
+                            .child(FolderPreview::new(images.clone(), preview_size));
+                        if images.is_empty() {
+                            preview = preview.child(div().text_size(px(13.0)).child("フォルダ"));
+                        }
+                        preview.into_any_element()
+                    }
+                    quick_preview::Content::Text(preview) => {
+                        let mut metadata = format!(
+                            "{}: {}",
+                            self.translator.text(Message::QuickPreviewEncoding),
+                            preview.encoding
+                        );
+                        if preview.lossy {
+                            metadata.push_str(" · ");
+                            metadata.push_str(&self.translator.text(Message::QuickPreviewLossy));
+                        }
+                        if preview.truncated {
+                            metadata.push_str(" · ");
+                            metadata
+                                .push_str(&self.translator.text(Message::QuickPreviewTruncated));
+                        }
+                        div()
+                            .size_full()
+                            .min_h_0()
+                            .flex()
+                            .flex_col()
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .px(px(16.0))
+                                    .py(px(10.0))
+                                    .text_size(px(11.0))
+                                    .text_color(palette.text_muted)
+                                    .child(metadata),
+                            )
+                            .child(
+                                div()
+                                    .id("quick-preview-text-reader")
+                                    .flex_grow_1()
+                                    .min_h_0()
+                                    .overflow_y_scroll()
+                                    .track_scroll(&text_scroll)
+                                    .occlude()
+                                    .on_scroll_wheel(cx.listener(
+                                        move |_this,
+                                              event: &gpui::ScrollWheelEvent,
+                                              _window,
+                                              cx| {
+                                            // Windows の WHEEL_PAGESCROLL sentinel は GPUI に巨大な
+                                            // line delta として届くため、reader の viewport 一頁へ置き換える。
+                                            if let gpui::ScrollDelta::Lines(delta) = event.delta
+                                                && delta.y.abs() >= 1_000_000.0
+                                            {
+                                                let viewport =
+                                                    text_scroll.bounds().size.height.as_f32();
+                                                let offset = -text_scroll.offset().y.as_f32()
+                                                    - delta.y.signum()
+                                                        * (viewport - 32.0).max(32.0);
+                                                text_scroll.set_offset(gpui::point(
+                                                    px(0.0),
+                                                    -px(offset.clamp(
+                                                        0.0,
+                                                        text_scroll.max_offset().y.as_f32(),
+                                                    )),
+                                                ));
+                                                cx.notify();
+                                            }
+                                            // 普通のwheelはscroll surfaceに任せる。sentinelも含め、
+                                            // eventを背後のdirectory listまで伝播させない。
+                                            cx.stop_propagation();
+                                        },
+                                    ))
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .px(px(16.0))
+                                            .pb(px(16.0))
+                                            .whitespace_normal()
+                                            .text_size(px(12.0))
+                                            .line_height(px(18.0))
+                                            .child(preview.text),
+                                    ),
+                            )
+                            .into_any_element()
+                    }
+                };
+                frame.child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .overflow_hidden()
+                        .bg(palette.surface_base)
+                        .child(body),
+                )
+            });
         Some(
             div()
                 .id("quick-preview-surface")
@@ -12020,227 +12288,7 @@ impl FilerShell {
                 .flex()
                 .items_center()
                 .justify_center()
-                .when_some(content, |surface, content| {
-                    let body = match content {
-                        quick_preview::Content::Loading => div()
-                            .text_color(gpui::rgb(0xffffff))
-                            .child(
-                                self.translator
-                                    .text(Message::QuickPreviewLoading)
-                                    .into_owned(),
-                            )
-                            .into_any_element(),
-                        quick_preview::Content::Failed => div()
-                            .text_color(gpui::rgb(0xffffff))
-                            .child(
-                                self.translator
-                                    .text(Message::QuickPreviewFailed)
-                                    .into_owned(),
-                            )
-                            .into_any_element(),
-                        quick_preview::Content::Generic(icon) => div()
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .gap(px(12.0))
-                            .child(
-                                Icon::new(icon)
-                                    .size(px(96.0))
-                                    .color(gpui::rgb(0xffffff).into()),
-                            )
-                            .child(
-                                div().text_color(gpui::rgb(0xffffff)).child(
-                                    self.translator
-                                        .text(Message::QuickPreviewFallback)
-                                        .into_owned(),
-                                ),
-                            )
-                            .into_any_element(),
-                        quick_preview::Content::Image(image) => gpui::img(image)
-                            .max_w_full()
-                            .max_h_full()
-                            .object_fit(gpui::ObjectFit::Contain)
-                            .into_any_element(),
-                        quick_preview::Content::Video(preview) => {
-                            let duration = preview.duration_seconds.map_or_else(
-                                || "-".to_owned(),
-                                |seconds| {
-                                    let total = seconds.max(0.0).round() as u64;
-                                    let hours = total / 3600;
-                                    let minutes = (total % 3600) / 60;
-                                    let seconds = total % 60;
-                                    if hours > 0 {
-                                        format!("{hours}:{minutes:02}:{seconds:02}")
-                                    } else {
-                                        format!("{minutes}:{seconds:02}")
-                                    }
-                                },
-                            );
-                            let dimensions = match (preview.width, preview.height) {
-                                (Some(width), Some(height)) => format!("{width} × {height}"),
-                                _ => "-".to_owned(),
-                            };
-                            let size = format_operation_bytes(preview.file_size);
-                            let metadata = format!(
-                                "{}: {}  ·  {}: {}  ·  {}: {}",
-                                self.translator.text(Message::QuickPreviewDuration),
-                                duration,
-                                self.translator.text(Message::QuickPreviewDimensions),
-                                dimensions,
-                                self.translator.text(Message::QuickPreviewSize),
-                                size,
-                            );
-                            let frame = preview.frame.map_or_else(
-                                || {
-                                    div()
-                                        .flex_1()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .text_color(gpui::rgb(0xffffff))
-                                        .child(
-                                            self.translator
-                                                .text(Message::QuickPreviewFailed)
-                                                .into_owned(),
-                                        )
-                                        .into_any_element()
-                                },
-                                |image| {
-                                    gpui::img(image)
-                                        .max_w_full()
-                                        .max_h_full()
-                                        .object_fit(gpui::ObjectFit::Contain)
-                                        .into_any_element()
-                                },
-                            );
-                            div()
-                                .w(relative(0.84))
-                                .h(relative(0.84))
-                                .min_h_0()
-                                .flex()
-                                .flex_col()
-                                .items_center()
-                                .justify_center()
-                                .gap(px(12.0))
-                                .child(frame)
-                                .child(
-                                    div()
-                                        .text_size(px(12.0))
-                                        .text_color(gpui::rgb(0xa0a0a0))
-                                        .child(metadata),
-                                )
-                                .into_any_element()
-                        }
-                        quick_preview::Content::FolderPreview(images) => {
-                            let preview_size = (viewport_size
-                                .width
-                                .as_f32()
-                                .min(viewport_size.height.as_f32())
-                                * 0.48)
-                                .clamp(96.0, 480.0);
-                            let mut preview = div()
-                                .flex()
-                                .flex_col()
-                                .items_center()
-                                .gap(px(16.0))
-                                .child(FolderPreview::new(images.clone(), preview_size));
-                            if images.is_empty() {
-                                preview = preview.child(
-                                    div()
-                                        .text_color(gpui::rgb(0xffffff))
-                                        .text_size(px(13.0))
-                                        .child("フォルダ"),
-                                );
-                            }
-                            preview.into_any_element()
-                        }
-                        quick_preview::Content::Text(preview) => {
-                            let mut metadata = format!(
-                                "{}: {}",
-                                self.translator.text(Message::QuickPreviewEncoding),
-                                preview.encoding
-                            );
-                            if preview.lossy {
-                                metadata.push_str(" · ");
-                                metadata
-                                    .push_str(&self.translator.text(Message::QuickPreviewLossy));
-                            }
-                            if preview.truncated {
-                                metadata.push_str(" · ");
-                                metadata.push_str(
-                                    &self.translator.text(Message::QuickPreviewTruncated),
-                                );
-                            }
-                            div()
-                                .w(relative(0.84))
-                                .h(relative(0.84))
-                                .min_h_0()
-                                .flex()
-                                .flex_col()
-                                .overflow_hidden()
-                                .bg(gpui_filer_ui::theme_palette(cx).surface_base)
-                                .text_color(gpui::rgb(0xffffff))
-                                .child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .px(px(16.0))
-                                        .py(px(10.0))
-                                        .text_size(px(11.0))
-                                        .child(metadata),
-                                )
-                                .child(
-                                    div()
-                                        .id("quick-preview-text-reader")
-                                        .flex_grow_1()
-                                        .min_h_0()
-                                        .overflow_y_scroll()
-                                        .track_scroll(&text_scroll)
-                                        .occlude()
-                                        .on_scroll_wheel(cx.listener(
-                                            move |_this,
-                                                  event: &gpui::ScrollWheelEvent,
-                                                  _window,
-                                                  cx| {
-                                                // Windows の WHEEL_PAGESCROLL sentinel は GPUI に巨大な
-                                                // line delta として届くため、reader の viewport 一頁へ置き換える。
-                                                if let gpui::ScrollDelta::Lines(delta) = event.delta
-                                                    && delta.y.abs() >= 1_000_000.0
-                                                {
-                                                    let viewport =
-                                                        text_scroll.bounds().size.height.as_f32();
-                                                    let offset = -text_scroll.offset().y.as_f32()
-                                                        - delta.y.signum()
-                                                            * (viewport - 32.0).max(32.0);
-                                                    text_scroll.set_offset(gpui::point(
-                                                        px(0.0),
-                                                        -px(offset.clamp(
-                                                            0.0,
-                                                            text_scroll.max_offset().y.as_f32(),
-                                                        )),
-                                                    ));
-                                                    cx.notify();
-                                                }
-                                                // 普通のwheelはscroll surfaceに任せる。sentinelも含め、
-                                                // eventを背後のdirectory listまで伝播させない。
-                                                cx.stop_propagation();
-                                            },
-                                        ))
-                                        .child(
-                                            div()
-                                                .w_full()
-                                                .px(px(16.0))
-                                                .pb(px(16.0))
-                                                .whitespace_normal()
-                                                .text_size(px(12.0))
-                                                .line_height(px(18.0))
-                                                .child(preview.text),
-                                        ),
-                                )
-                                .into_any_element()
-                        }
-                    };
-                    surface.child(body)
-                })
+                .child(frame)
                 .into_any_element(),
         )
     }
@@ -12762,6 +12810,7 @@ impl FilerShell {
             workspaces.push(session_store::WorkspaceSnapshot {
                 id: workspace_id.0.get(),
                 name: workspace.name.clone(),
+                default_name_number: workspace.default_name_number,
                 panes,
                 pane_layout: saved_layout.to_snapshot(),
                 focused_pane: focused_pane.0,
@@ -16873,7 +16922,9 @@ impl FilerShell {
             .find(|tab| tab.id == self.workspace.active().focused_pane().active_tab_id)
             .and_then(|tab| tab.view.read(cx).location());
         let mut workspace = Workspace::single_pane();
-        workspace.name = format!("Workspace {}", self.workspace.ordered.len() + 1);
+        let number = self.workspace.ordered.len() + 1;
+        workspace.name = Translator::new(Locale::English).workspace_name(number);
+        workspace.default_name_number = std::num::NonZeroUsize::new(number);
 
         self.prepare_workspace_switch(cx);
         self.workspace.insert(id, workspace);
@@ -16889,7 +16940,11 @@ impl FilerShell {
             .workspace
             .ordered
             .iter()
-            .map(|(_, workspace)| workspace.name.to_lowercase())
+            .map(|(_, workspace)| {
+                self.translator
+                    .workspace_title(&workspace.name, workspace.default_name_number)
+                    .to_lowercase()
+            })
             .collect::<HashSet<_>>();
         for number in 1usize.. {
             let numbered = if number == 1 {
@@ -17142,7 +17197,8 @@ impl FilerShell {
             cx.notify();
             return;
         }
-        let Some(name) = self.duplicate_workspace_name(&source.name) else {
+        let source_title = self.translator.workspace_title(&source.name, source.default_name_number);
+        let Some(name) = self.duplicate_workspace_name(&source_title) else {
             append_operation_notice(
                 &mut self.operation_notice,
                 Message::WorkspaceDuplicateFailed,
@@ -17285,6 +17341,7 @@ impl FilerShell {
         remap_tab_ids(&mut duplicated, &tab_ids);
         duplicated.id = workspace_id.0.get();
         duplicated.name = name;
+        duplicated.default_name_number = None;
         let Some(insert_at) = source_index.checked_add(1) else {
             return;
         };
@@ -17984,7 +18041,7 @@ impl FilerShell {
             }
             return;
         }
-        let name = workspace.name.clone();
+        let name = self.translator.workspace_title(&workspace.name, workspace.default_name_number);
         let input = cx.new(|cx| rename_editor::RenameInput::address_bar(cx, name));
         let input_events = cx.subscribe(&input, |_this, _, _, cx| cx.notify());
         input.update(cx, |input, cx| input.focus(window, cx));
@@ -18023,8 +18080,12 @@ impl FilerShell {
             .iter_mut()
             .find(|(current, _)| *current == id)
         {
-            workspace.name = name;
-            self.save_requested = true;
+            let title = self.translator.workspace_title(&workspace.name, workspace.default_name_number);
+            if title != name {
+                workspace.name = name;
+                workspace.default_name_number = None;
+                self.save_requested = true;
+            }
         }
         cx.notify();
     }
@@ -18119,7 +18180,7 @@ impl FilerShell {
                     .clone(),
                 menu_open: self.menu.open() == Some(menu::Open::Popup(menu::Popup::Workspace))
                     && self.workspace_menu_target == Some(*id),
-                title: workspace.name.clone(),
+                title: self.translator.workspace_title(&workspace.name, workspace.default_name_number),
                 active: *id == self.workspace.active,
                 transfer_target: transfer_target == Some(*id),
                 closable: self.workspace.ordered.len() > 1,
@@ -18153,7 +18214,10 @@ impl FilerShell {
                 .map(|entry| titlebar::WorkspaceRestoreItem {
                     kind: titlebar::RestoreItemKind::Workspace,
                     history_id: entry.history_id,
-                    title: entry.workspace.name.clone(),
+                    title: self.translator.workspace_title(
+                        &entry.workspace.name,
+                        entry.workspace.default_name_number,
+                    ),
                     detail: None,
                 })
                 .collect(),
@@ -18213,9 +18277,9 @@ impl FilerShell {
                     });
                 }
             },
-            cx.listener(|this, event: &gpui::ClickEvent, _window, cx| {
+            cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
                 if event.standard_click() {
-                    this.open_search(cx);
+                    this.open_titlebar_search(window, cx);
                 }
             }),
             cx.listener(|this, _, _window, cx| this.leave_menu(cx)),
@@ -73227,16 +73291,14 @@ fn ordinary_trash_shell_writer_child_crash_before_terminal_upsert(cx: &mut gpui:
         visual.simulate_mouse_up(empty_list_point, gpui::MouseButton::Right, modifiers);
         visual.run_until_parked();
 
-        let (popup_anchor, requests_after_open, selection_after_open) =
+        let (requests_after_open, selection_after_open) =
             visual.read_entity(&shell, |shell, cx| {
                 assert_eq!(
                     shell.menu.open(),
                     Some(menu::Open::Popup(menu::Popup::Background))
                 );
+                assert_eq!(shell.menu_at, Some(empty_list_point));
                 (
-                    shell
-                        .menu_at
-                        .expect("background popup keeps its pointer anchor"),
                     shell.operation_requests_for_test(cx).len(),
                     view.read(cx).selection_identity_for_test(),
                 )
@@ -73249,23 +73311,12 @@ fn ordinary_trash_shell_writer_child_crash_before_terminal_upsert(cx: &mut gpui:
             selection_after_open.2.is_empty(),
             "the empty selection stays empty"
         );
-        // menu_surface uses a 4px panel inset and 26px rows for mouse context menus.
-        let copy_path_row_index = visual.update(|_, cx| {
-            shell.update(cx, |shell, cx| {
-                shell
-                    .menu_entries(cx)
-                    .iter()
-                    .position(|row| {
-                        row.action == gpui_filer_input::ActionId::new(input::COPY_CURRENT_PATH)
-                            && row.enabled
-                    })
-                    .expect("enabled Copy Current Path row")
+        let copy_path_row = visual.update_entity(&shell, |shell, cx| {
+            shell.context_menu_row_point_for_test(cx, |row| {
+                matches!(row, menu::Row::Leaf(entry)
+                    if entry.action.as_str() == input::COPY_CURRENT_PATH && entry.enabled)
             })
         });
-        let copy_path_row = gpui::point(
-            popup_anchor.x + px(24.0),
-            popup_anchor.y + px(17.0 + 26.0 * copy_path_row_index as f32),
-        );
         visual.simulate_mouse_down(copy_path_row, gpui::MouseButton::Left, modifiers);
         visual.simulate_mouse_up(copy_path_row, gpui::MouseButton::Left, modifiers);
         visual.run_until_parked();
@@ -73308,21 +73359,19 @@ fn ordinary_trash_shell_writer_child_crash_before_terminal_upsert(cx: &mut gpui:
         visual.simulate_mouse_down(empty_list_point, gpui::MouseButton::Right, modifiers);
         visual.simulate_mouse_up(empty_list_point, gpui::MouseButton::Right, modifiers);
         visual.run_until_parked();
-        let folder_row_index = visual.update(|_, cx| {
-            shell.update(cx, |shell, cx| {
-                shell
-                    .menu_entries(cx)
-                    .iter()
-                    .position(|row| {
-                        row.action == gpui_filer_input::ActionId::new(input::CREATE_FOLDER)
-                    })
-                    .expect("rendered New Folder row")
+        let creation = visual.update_entity(&shell, |shell, cx| {
+            shell.context_menu_row_point_for_test(cx, |row| {
+                matches!(row, menu::Row::Branch { submenu: menu::ViewSubmenu::Creation, .. })
             })
         });
-        let new_folder_row = gpui::point(
-            popup_anchor.x + px(24.0),
-            popup_anchor.y + px(17.0 + 26.0 * folder_row_index as f32),
-        );
+        visual.simulate_mouse_move(creation, None, modifiers);
+        visual.run_until_parked();
+        let new_folder_row = visual.update_entity(&shell, |shell, cx| {
+            shell.context_menu_row_point_for_test(cx, |row| {
+                matches!(row, menu::Row::Leaf(entry)
+                    if entry.action.as_str() == input::CREATE_FOLDER && entry.enabled)
+            })
+        });
         visual.simulate_mouse_down(new_folder_row, gpui::MouseButton::Left, modifiers);
         visual.simulate_mouse_up(new_folder_row, gpui::MouseButton::Left, modifiers);
         visual.run_until_parked();
@@ -73478,12 +73527,12 @@ fn ordinary_trash_shell_writer_child_crash_before_terminal_upsert(cx: &mut gpui:
         visual.simulate_mouse_down(blank, gpui::MouseButton::Right, modifiers);
         visual.simulate_mouse_up(blank, gpui::MouseButton::Right, modifiers);
         visual.run_until_parked();
-        let anchor = visual.read_entity(&shell, |shell, _cx| {
+        visual.read_entity(&shell, |shell, _| {
             assert_eq!(
                 shell.menu.open(),
                 Some(menu::Open::Popup(menu::Popup::Background))
             );
-            shell.menu_at.expect("popup anchor")
+            assert_eq!(shell.menu_at, Some(blank));
         });
         let captured_target = visual.read_entity(&shell, |shell, _| {
             shell
@@ -73491,21 +73540,19 @@ fn ordinary_trash_shell_writer_child_crash_before_terminal_upsert(cx: &mut gpui:
                 .clone()
                 .expect("captured background target")
         });
-        let file_row_index = visual.update(|_, cx| {
-            shell.update(cx, |shell, cx| {
-                shell
-                    .menu_entries(cx)
-                    .iter()
-                    .position(|row| {
-                        row.action == gpui_filer_input::ActionId::new(input::CREATE_FILE)
-                    })
-                    .expect("rendered New File row")
+        let creation = visual.update_entity(&shell, |shell, cx| {
+            shell.context_menu_row_point_for_test(cx, |row| {
+                matches!(row, menu::Row::Branch { submenu: menu::ViewSubmenu::Creation, .. })
             })
         });
-        let row_point = gpui::point(
-            anchor.x + px(24.0),
-            anchor.y + px(17.0 + 26.0 * file_row_index as f32),
-        );
+        visual.simulate_mouse_move(creation, None, modifiers);
+        visual.run_until_parked();
+        let row_point = visual.update_entity(&shell, |shell, cx| {
+            shell.context_menu_row_point_for_test(cx, |row| {
+                matches!(row, menu::Row::Leaf(entry)
+                    if entry.action.as_str() == input::CREATE_FILE && entry.enabled)
+            })
+        });
         visual.simulate_mouse_down(row_point, gpui::MouseButton::Left, modifiers);
         visual.simulate_mouse_up(row_point, gpui::MouseButton::Left, modifiers);
         visual.run_until_parked();
@@ -73757,35 +73804,6 @@ fn ordinary_trash_shell_writer_child_crash_before_terminal_upsert(cx: &mut gpui:
             request_baseline,
             "opening the item popup submits nothing"
         );
-        let rendered_actions = visual.update(|_, cx| {
-            shell.update(cx, |shell, cx| {
-                shell
-                    .menu_rows(cx)
-                    .into_iter()
-                    .map(|row| match row {
-                        menu::Row::Leaf(entry) => entry.action.as_str().to_owned(),
-                        menu::Row::Info { .. } => "<info>".to_owned(),
-                        menu::Row::Theme { .. } => "<theme>".to_owned(),
-                        menu::Row::Branch { .. } => "<branch>".to_owned(),
-                    })
-                    .collect::<Vec<_>>()
-            })
-        });
-        let mut expected_actions = vec![
-            input::ACTIVATE,
-            input::ACTIVATE_NEW_TAB,
-            input::COPY_PATHS,
-            input::COPY_NAMES,
-            input::RENAME,
-            input::COPY,
-            input::CUT,
-            menu::CREATE_ZIP,
-            menu::CREATE_7Z,
-        ];
-        if cfg!(windows) {
-            expected_actions.push(input::PROPERTIES);
-        }
-        expected_actions.push(input::BATCH_RENAME);
         assert!(
             visual.update(|_, cx| {
                 shell.update(cx, |shell, cx| {
@@ -73917,27 +73935,35 @@ fn ordinary_trash_shell_writer_child_crash_before_terminal_upsert(cx: &mut gpui:
             selection_before,
             "omitting the stale-scope row does not change FileView selection"
         );
-        assert_eq!(
-            rendered_actions, expected_actions,
-            "the rendered item popup keeps Create ZIP in the expected action order"
-        );
-        let zip_index = rendered_actions
-            .iter()
-            .position(|action| action == menu::CREATE_ZIP)
-            .expect("rendered item popup contains Create ZIP");
-        // GPUI does not publish the popup's row child IDs through `debug_bounds` in this
-        // fixture. Its tracked ScrollHandle does expose the rendered, clipped row viewport.
-        let rows_bounds =
-            visual.read_entity(&shell, |shell, _| shell.context_popup_scroll.bounds());
-        let zip_row_top = rows_bounds.origin.y + px(zip_index as f32 * menu_surface::ROW_HEIGHT);
-        let zip_row = gpui::point(
-            rows_bounds.origin.x + px(24.0),
-            zip_row_top + px(menu_surface::ROW_HEIGHT / 2.0),
-        );
-        assert!(
-            rows_bounds.contains(&zip_row),
-            "the rendered ZIP row fits inside the popup's measured row viewport"
-        );
+        let open_compression = |visual: &mut gpui::VisualTestContext| {
+            let branch = visual.update_entity(&shell, |shell, cx| {
+                shell.context_menu_row_point_for_test(cx, |row| {
+                    matches!(row, menu::Row::Branch { submenu: menu::ViewSubmenu::Compression, .. })
+                })
+            });
+            visual.simulate_mouse_move(branch, None, modifiers);
+            visual.run_until_parked();
+            assert_eq!(
+                visual.read_entity(&shell, |shell, _| shell.menu.view_submenu()),
+                Some(menu::ViewSubmenu::Compression),
+            );
+        };
+        open_compression(visual);
+        let zip_row = visual.update_entity(&shell, |shell, cx| {
+            let actions: Vec<_> = shell
+                .menu_rows(cx)
+                .into_iter()
+                .map(|row| match row {
+                    menu::Row::Leaf(entry) => entry.action.as_str(),
+                    _ => panic!("Compression contains only commands"),
+                })
+                .collect();
+            assert_eq!(actions, [menu::CREATE_ZIP, menu::CREATE_7Z]);
+            shell.context_menu_row_point_for_test(cx, |row| {
+                matches!(row, menu::Row::Leaf(entry)
+                    if entry.action.as_str() == menu::CREATE_ZIP && entry.enabled)
+            })
+        });
         visual.simulate_mouse_down(zip_row, gpui::MouseButton::Left, modifiers);
         visual.simulate_mouse_up(zip_row, gpui::MouseButton::Left, modifiers);
         visual.run_until_parked();
@@ -74009,19 +74035,8 @@ fn ordinary_trash_shell_writer_child_crash_before_terminal_upsert(cx: &mut gpui:
         visual.simulate_mouse_down(source_point, gpui::MouseButton::Right, modifiers);
         visual.simulate_mouse_up(source_point, gpui::MouseButton::Right, modifiers);
         visual.run_until_parked();
-        visual.update(|_, cx| {
-            shell.update(cx, |shell, cx| {
-                let rows = shell.menu_rows(cx);
-                let index = rows
-                    .iter()
-                    .position(|row| {
-                        matches!(row, menu::Row::Leaf(entry)
-                            if entry.action.as_str() == menu::CREATE_7Z)
-                    })
-                    .expect("rendered 7z command");
-                shell.menu.move_highlight(index as isize, rows.len());
-            });
-        });
+        open_compression(visual);
+        visual.simulate_keystrokes("down down");
         visual.simulate_keystrokes("enter");
         visual.run_until_parked();
         let (seven_zip_request, menu_after_7z) = visual.read_entity(&shell, |shell, cx| {
@@ -75906,13 +75921,12 @@ fn ordinary_trash_shell_writer_child_crash_before_terminal_upsert(cx: &mut gpui:
                 "Create shortcut is projected for one ordinary folder");
             shell.menu_target = Some(captured.clone());
         }));
-        let row_index = visual.update(|_, cx| shell.update(cx, |shell, cx| shell.menu_rows(cx).iter()
-            .position(|row| matches!(row, menu::Row::Leaf(entry)
-                if entry.action.as_str() == menu::CREATE_SHORTCUT && entry.enabled))
-            .expect("Create shortcut is projected for one ordinary file")));
-        let bounds = visual.read_entity(&shell, |shell, _| shell.context_popup_scroll.bounds());
-        let row_point = gpui::point(bounds.origin.x + px(24.0), bounds.origin.y
-            + px(row_index as f32 * menu_surface::ROW_HEIGHT + menu_surface::ROW_HEIGHT / 2.0));
+        let row_point = visual.update_entity(&shell, |shell, cx| {
+            shell.context_menu_row_point_for_test(cx, |row| {
+                matches!(row, menu::Row::Leaf(entry)
+                    if entry.action.as_str() == menu::CREATE_SHORTCUT && entry.enabled)
+            })
+        });
         visual.simulate_mouse_down(row_point, gpui::MouseButton::Left, modifiers);
         visual.simulate_mouse_up(row_point, gpui::MouseButton::Left, modifiers);
         visual.run_until_parked();
@@ -76017,13 +76031,12 @@ fn ordinary_trash_shell_writer_child_crash_before_terminal_upsert(cx: &mut gpui:
         visual.simulate_mouse_down(folder_point, gpui::MouseButton::Right, modifiers);
         visual.simulate_mouse_up(folder_point, gpui::MouseButton::Right, modifiers);
         visual.run_until_parked();
-        let folder_rows = visual.update(|_, cx| shell.update(cx, |shell, cx| shell.menu_rows(cx)));
-        let folder_row_index = folder_rows.iter().position(|row| matches!(row, menu::Row::Leaf(entry)
-            if entry.action.as_str() == menu::CREATE_SHORTCUT && entry.enabled))
-            .expect("Create shortcut is rendered for the folder popup");
-        let bounds = visual.read_entity(&shell, |shell, _| shell.context_popup_scroll.bounds());
-        let folder_row_point = gpui::point(bounds.origin.x + px(24.0), bounds.origin.y
-            + px(folder_row_index as f32 * menu_surface::ROW_HEIGHT + menu_surface::ROW_HEIGHT / 2.0));
+        let folder_row_point = visual.update_entity(&shell, |shell, cx| {
+            shell.context_menu_row_point_for_test(cx, |row| {
+                matches!(row, menu::Row::Leaf(entry)
+                    if entry.action.as_str() == menu::CREATE_SHORTCUT && entry.enabled)
+            })
+        });
         visual.simulate_mouse_down(folder_row_point, gpui::MouseButton::Left, modifiers);
         visual.simulate_mouse_up(folder_row_point, gpui::MouseButton::Left, modifiers);
         visual.run_until_parked();
@@ -78753,6 +78766,7 @@ fn ordinary_trash_shell_writer_child_crash_before_terminal_upsert(cx: &mut gpui:
                 workspaces: vec![session_store::WorkspaceSnapshot {
                     id: 1,
                     name: "Workspace 1".into(),
+                    default_name_number: None,
                     panes: vec![session_store::PaneSnapshot {
                         key: 1,
                         active,

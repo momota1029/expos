@@ -10,6 +10,8 @@ pub const FLUENT11_AUTHORS: &str = include_str!("../assets/licenses/fluent11/AUT
 pub enum IconId {
     Menu,
     Add,
+    ZoomIn,
+    ZoomOut,
     Close,
     Check,
     ChevronUp,
@@ -41,6 +43,10 @@ pub enum IconId {
     Lock,
     Unlock,
     Warning,
+    OperationCompleted,
+    OperationFailed,
+    OperationInProgress,
+    OperationCancelled,
     Play,
     FolderFallbackGlyph,
     Libraries,
@@ -91,6 +97,8 @@ impl IconId {
     pub const ALL: &'static [Self] = &[
         Self::Menu,
         Self::Add,
+        Self::ZoomIn,
+        Self::ZoomOut,
         Self::Close,
         Self::Check,
         Self::ChevronUp,
@@ -122,6 +130,10 @@ impl IconId {
         Self::Lock,
         Self::Unlock,
         Self::Warning,
+        Self::OperationCompleted,
+        Self::OperationFailed,
+        Self::OperationInProgress,
+        Self::OperationCancelled,
         Self::Play,
         Self::FolderFallbackGlyph,
         Self::Libraries,
@@ -165,6 +177,14 @@ impl IconId {
             Add => (
                 "add",
                 IconSource::Svg("icons/fluent-system/add_16_regular.svg"),
+            ),
+            ZoomIn => (
+                "zoom-in",
+                IconSource::Svg("icons/fluent-system/zoom_in_16_regular.svg"),
+            ),
+            ZoomOut => (
+                "zoom-out",
+                IconSource::Svg("icons/fluent-system/zoom_out_16_regular.svg"),
             ),
             Close => (
                 "close",
@@ -290,6 +310,22 @@ impl IconId {
             Warning => (
                 "warning",
                 IconSource::Svg("icons/fluent-system/warning_16_regular.svg"),
+            ),
+            OperationCompleted => (
+                "operation-completed",
+                IconSource::Svg("icons/fluent-system/checkmark_circle_16_filled.svg"),
+            ),
+            OperationFailed => (
+                "operation-failed",
+                IconSource::Svg("icons/fluent-system/dismiss_circle_16_filled.svg"),
+            ),
+            OperationInProgress => (
+                "operation-in-progress",
+                IconSource::Svg("icons/fluent-system/arrow_sync_16_regular.svg"),
+            ),
+            OperationCancelled => (
+                "operation-cancelled",
+                IconSource::Svg("icons/fluent-system/subtract_circle_16_regular.svg"),
             ),
             Play => ("play", IconSource::TextGlyph('\u{25B6}')),
             FolderFallbackGlyph => (
@@ -464,6 +500,12 @@ impl AssetSource for ResourceAssets {
             "icons/fluent-system/add_16_regular.svg" => Some(include_bytes!(
                 "../assets/icons/fluent-system/add_16_regular.svg"
             )),
+            "icons/fluent-system/zoom_in_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/zoom_in_16_regular.svg"
+            )),
+            "icons/fluent-system/zoom_out_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/zoom_out_16_regular.svg"
+            )),
             "icons/fluent-system/arrow_clockwise_16_regular.svg" => Some(include_bytes!(
                 "../assets/icons/fluent-system/arrow_clockwise_16_regular.svg"
             )),
@@ -567,6 +609,18 @@ impl AssetSource for ResourceAssets {
             }
             "icons/fluent-system/warning_16_regular.svg" => Some(include_bytes!(
                 "../assets/icons/fluent-system/warning_16_regular.svg"
+            )),
+            "icons/fluent-system/checkmark_circle_16_filled.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/checkmark_circle_16_filled.svg"
+            )),
+            "icons/fluent-system/dismiss_circle_16_filled.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/dismiss_circle_16_filled.svg"
+            )),
+            "icons/fluent-system/arrow_sync_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/arrow_sync_16_regular.svg"
+            )),
+            "icons/fluent-system/subtract_circle_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/subtract_circle_16_regular.svg"
             )),
             "icons/fluent11/folder-layers/back.svg" => Some(include_bytes!(
                 "../assets/icons/fluent11/folder-layers/back.svg"

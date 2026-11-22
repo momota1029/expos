@@ -1042,6 +1042,7 @@ mod tests {
             workspaces: vec![session_store::WorkspaceSnapshot {
                 id: 1,
                 name: "Workspace 1".into(),
+                default_name_number: None,
                 panes: vec![session_store::PaneSnapshot {
                     key: 1,
                     active: Some(1),

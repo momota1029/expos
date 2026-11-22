@@ -11,7 +11,7 @@ const LIGHT_THEME: &str = "light";
 const BUILTIN_LIGHT: &str = r##"
 [palette]
 gray_100 = "#1A1A1A"
-gray_500 = "#A3A3A3"
+gray_500 = "#555555"
 gray_600 = "#C7C7C7"
 gray_700 = "#D4D4D4"
 gray_750 = "#E0E0E0"
@@ -23,6 +23,7 @@ gray_1000 = "#FFFFFF"
 blue_900 = "#DBEAFE"
 blue_800 = "#BFDBFE"
 blue_500 = "#3B82F6"
+blue_450 = "#286BEA"
 blue_400 = "#2563EB"
 
 [roles.chrome]
@@ -45,6 +46,8 @@ border = "palette.gray_750"
 bg = "palette.gray_875"
 [roles.content.selected]
 bg = "palette.blue_900"
+[roles.content.focus]
+bg = "palette.gray_800"
 [roles.content.active]
 bg = "palette.blue_800"
 [roles.selected]
@@ -55,10 +58,14 @@ bg = "palette.blue_500"
 border = "palette.blue_400"
 [roles.accent.hover]
 bg = "palette.blue_400"
+[roles.tab_accent]
+bg = "palette.blue_450"
 [roles.muted]
 text = "palette.gray_500"
 [roles.warning]
-text = "#D97706"
+text = "#A65004"
+[roles.error]
+text = "#B42318"
 
 [components.file_item]
 base = "content"
@@ -228,6 +235,9 @@ fn parse(source: &str) -> Option<ThemePalette> {
     assign_role(&mut result, &roles, &colors, "content", "active", |p, c| {
         p.selection_focus_bg = c.bg
     });
+    if let Some(bg) = resolve_role_field(&roles, &colors, "content", "focus", "bg", 0) {
+        result.focus_bg = bg;
+    }
     assign_role(&mut result, &roles, &colors, "selected", "", |p, c| {
         p.selection_bg = c.bg
     });
@@ -264,12 +274,17 @@ fn parse(source: &str) -> Option<ThemePalette> {
     assign_role(&mut result, &roles, &colors, "accent", "hover", |p, c| {
         p.accent_hover = c.bg
     });
+    result.tab_accent = resolve_role_field(&roles, &colors, "tab_accent", "", "bg", 0)
+        .unwrap_or(result.accent);
     assign_role(&mut result, &roles, &colors, "muted", "", |p, c| {
         p.text_muted = c.text
     });
     assign_role(&mut result, &roles, &colors, "warning", "", |p, c| {
         p.warning_text = c.text
     });
+    if let Some(text) = resolve_role_field(&roles, &colors, "error", "", "text", 0) {
+        result.error_text = text;
+    }
     assign_role(
         &mut result,
         &roles,

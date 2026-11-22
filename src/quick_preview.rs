@@ -198,6 +198,15 @@ impl Session {
     pub fn is_open(&self) -> bool {
         self.target.is_some()
     }
+    pub fn file_name(&self) -> Option<String> {
+        let path = &self.target.as_ref()?.path;
+        Some(
+            path.file_name()
+                .unwrap_or(path.as_os_str())
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
     pub fn content(&self) -> Option<Content> {
         self.content.clone()
     }

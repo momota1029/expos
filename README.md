@@ -1,6 +1,12 @@
 # expos beta
 
-expos is a Windows file manager built with Rust and GPUI. This beta provides directory browsing in Rows, Tiles, and Icons views, selection and keyboard navigation, previews, rename, archive browsing, and file operations. Local and quick search work independently; titlebar Search requires Everything to be running.
+expos is a Windows file manager built with Rust and GPUI. This beta provides directory browsing in Rows, Tiles, and Icons views, selection and keyboard navigation, previews, rename, archive browsing, and file operations.
+
+Press **/** to search filenames in the current folder. Matches are highlighted in the file list. The titlebar search button opens Everything Search on Windows and in-folder Quick Search on Linux. Everything Search requires Everything to be running.
+
+Rows keeps filenames on one line and shows the full name on hover. As the pane narrows, Rows hides Kind, Date modified, and Size in that order, then restores them as space returns.
+
+In Quick Preview, the header shows the filename. Close it with the header's close button or **Escape**.
 
 Copyright in expos original project code is held by expos contributors. That original code is licensed under GNU GPL version 3 only; see `LICENSE`. Bundled Fluent11 artwork retains its own license, with the license text in `crates/resources/assets/licenses/fluent11/LICENSE` and attribution in `crates/resources/assets/licenses/fluent11/AUTHORS.txt`. The two folder-layer SVGs were split from upstream artwork in this project on 2026-09-16 (source Git revision `ae7000b73`). Third-party dependencies retain their own licenses and notices; consult each component's source or package metadata and `THIRD_PARTY_NOTICES.txt`.
 
@@ -46,6 +52,8 @@ On Linux, inline **Rename** changes the name of an ordinary file or folder in it
 Video still-frame previews require `ffmpeg` on `PATH`. `ffprobe` is optional and provides metadata and seeking support. Install FFmpeg separately, add its executable directory to `PATH`, then restart expos. Other preview capabilities do not require these tools.
 
 ## Beta status
+
+Open **Details** in Job progress to see recent file operations, their status, and any recorded failure reason. The panel also shows byte counts for operations that report transfer progress.
 
 File operations can end partially: some items may complete while another item fails or is cancelled. Incomplete-operation recovery is still under development; do not assume an interrupted operation can be resumed or undone after restarting the application.
 

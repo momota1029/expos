@@ -15,20 +15,30 @@ use gpui_filer_ui::horizontal_scrollbar;
 const PANEL_WIDTH: f32 = 176.0;
 const MENU_ROW_PADDING_X: f32 = 12.0;
 const MENU_ROW_GAP: f32 = 8.0;
-const MENU_ROW_CHECK_WIDTH: f32 = 16.0;
-const MENU_ROW_BRANCH_ICON_WIDTH: f32 = 10.0;
+const MENU_ICON_SIZE: f32 = 16.0;
+const MENU_FONT_SIZE: f32 = 14.0;
+const SHORTCUT_FONT_SIZE: f32 = 12.0;
 /// dropdown の 1 行の高さ。
-pub(super) const ROW_HEIGHT: f32 = 26.0;
+pub(super) const ROW_HEIGHT: f32 = 32.0;
 /// Touch-invoked context-menu actions need the same minimum hit height as other touch controls.
 pub(super) const TOUCH_CONTEXT_ROW_HEIGHT: f32 = 44.0;
 pub(super) const VIEW_ROW_HEIGHT: f32 = 44.0;
 pub(super) const REOPEN_ROW_HEIGHT: f32 = 44.0;
-const POPUP_PANEL_CHROME_HEIGHT: f32 = 10.0;
+const POPUP_PADDING: f32 = 6.0;
+const POPUP_BORDER: f32 = 1.0;
+const POPUP_INSET: f32 = POPUP_PADDING + POPUP_BORDER;
+const POPUP_PANEL_CHROME_HEIGHT: f32 = POPUP_INSET * 2.0;
+const MENU_SEPARATOR_HEIGHT: f32 = 9.0;
 /// メニューバーのタイトルの左右の余白。
 const TITLE_PADDING_X: f32 = 12.0;
 /// メニューバーのタイトルの最小幅。タッチの目安（44）を下回らない。
 const TITLE_MIN_WIDTH: f32 = 44.0;
 const MENU_VIEWPORT_MARGIN: f32 = 8.0;
+const POPUP_POINTER_OFFSET: f32 = 12.0;
+
+fn viewport_margin(extent: f32) -> f32 {
+    MENU_VIEWPORT_MARGIN.min((extent / 4.0).max(0.0))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ViewMenuGeometry {
@@ -50,7 +60,7 @@ fn view_menu_geometry(
     requested_root_width: f32,
     requested_child_width: f32,
 ) -> ViewMenuGeometry {
-    let margin = MENU_VIEWPORT_MARGIN.min((viewport_width / 4.0).max(0.0));
+    let margin = viewport_margin(viewport_width);
     let usable_width = (viewport_width - margin * 2.0).max(0.0);
     // 子メニュー幅でルート列を縮めると、行のヒット領域が開閉中に動いてしまう。
     // 半分を子列の安定した予約幅にし、実際の子列だけを予約内に収める。
@@ -80,21 +90,94 @@ fn view_menu_geometry(
     }
 }
 
-fn menu_column_width(rows: &[menu::Row], window: &Window) -> f32 {
+fn menu_column_width(rows: &[menu::Row], shortcuts: &[Option<String>], window: &Window) -> f32 {
     rows.iter()
-        .map(|row| {
-            let branch_width = if matches!(row, menu::Row::Branch { .. }) {
-                MENU_ROW_GAP + MENU_ROW_BRANCH_ICON_WIDTH
+        .zip(shortcuts)
+        .map(|(row, shortcut)| {
+            let trailing_width = if matches!(row, menu::Row::Branch { .. }) {
+                MENU_ROW_GAP + MENU_ICON_SIZE
             } else {
-                0.0
+                shortcut.as_ref().map_or(0.0, |label| {
+                    MENU_ROW_GAP + text_width(label, SHORTCUT_FONT_SIZE, window).ceil()
+                })
             };
-            title_width(row.label(), window)
+            text_width(row.label(), MENU_FONT_SIZE, window).ceil()
+                + POPUP_PANEL_CHROME_HEIGHT
                 + MENU_ROW_PADDING_X * 2.0
                 + MENU_ROW_GAP
-                + MENU_ROW_CHECK_WIDTH
-                + branch_width
+                + MENU_ICON_SIZE
+                + trailing_width
         })
         .fold(PANEL_WIDTH, f32::max)
+}
+
+fn popup_border(palette: gpui_filer_ui::ThemePalette) -> gpui::Rgba {
+    // テーマの border はアクセント色にもなるため、ポップアップの輪郭は面と文字の色から作る。
+    palette.surface_raised.blend(palette.text.opacity(0.16))
+}
+
+pub(super) fn menu_row_top(index: usize, row_height: f32, separators: &[usize]) -> f32 {
+    index as f32 * row_height
+        + separators.partition_point(|&before| before <= index) as f32 * MENU_SEPARATOR_HEIGHT
+}
+
+fn popup_panel(palette: gpui_filer_ui::ThemePalette) -> gpui::Div {
+    div()
+        .absolute()
+        .p(px(POPUP_PADDING))
+        .flex()
+        .flex_col()
+        .text_size(px(MENU_FONT_SIZE))
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(popup_border(palette))
+        .bg(palette.surface_raised)
+        .shadow(vec![
+            gpui::BoxShadow::new(px(0.0), px(4.0), gpui::black().opacity(0.24))
+                .blur_radius(px(12.0)),
+        ])
+        .occlude()
+}
+
+fn action_icon(action: ActionId) -> Option<IconId> {
+    Some(match action.as_str() {
+        input::ACTIVATE | input::ACTIVATE_NEW_TAB => IconId::Open,
+        input::COPY => IconId::Copy,
+        input::COPY_NAMES | input::COPY_PATHS | input::COPY_CURRENT_PATH => IconId::CopyPath,
+        input::CUT => IconId::Cut,
+        input::PASTE | input::PASTE_HERE => IconId::Paste,
+        input::PASTE_LINK | input::PASTE_JUNCTION | menu::CREATE_SHORTCUT => IconId::CreateLink,
+        input::RENAME => IconId::Rename,
+        input::DELETE_TO_TRASH => IconId::Delete,
+        input::PROPERTIES => IconId::Properties,
+        input::CREATE_FOLDER => IconId::NewFolder,
+        input::CREATE_FILE => IconId::NewFile,
+        input::REFRESH => IconId::Refresh,
+        input::NAVIGATE_BACK => IconId::Back,
+        input::NAVIGATE_FORWARD => IconId::Forward,
+        menu::OPEN_IN_NEW_PANE => IconId::SplitPane,
+        _ => return None,
+    })
+}
+
+fn shortcut_label(chord: &gpui_filer_input::KeyChord) -> String {
+    let mut label = String::new();
+    for (pressed, name) in [
+        (chord.modifiers.control, "Ctrl+"),
+        (chord.modifiers.alt, "Alt+"),
+        (chord.modifiers.shift, "Shift+"),
+        (chord.modifiers.platform, "Super+"),
+    ] {
+        if pressed {
+            label.push_str(name);
+        }
+    }
+    let mut key = chord.key.as_str().chars();
+    if let Some(first) = key.next() {
+        label.push(first.to_ascii_uppercase());
+        label.push_str(key.as_str());
+    }
+    label
 }
 
 pub(super) fn reveal_scroll_offset(
@@ -107,7 +190,7 @@ pub(super) fn reveal_scroll_offset(
     if content_height <= viewport_height {
         return 0.0;
     }
-    let next_top = if row_top < current_top {
+    let next_top = if row_height >= viewport_height || row_top < current_top {
         row_top
     } else if row_top + row_height > current_top + viewport_height {
         row_top + row_height - viewport_height
@@ -117,23 +200,30 @@ pub(super) fn reveal_scroll_offset(
     next_top.clamp(0.0, content_height - viewport_height)
 }
 
-fn context_popup_top(anchor_top: f32, viewport_height: f32, row_content_height: f32) -> f32 {
-    let panel_height = (row_content_height + POPUP_PANEL_CHROME_HEIGHT).min(viewport_height);
-    anchor_top.clamp(0.0, (viewport_height - panel_height).max(0.0))
+fn popup_position(anchor: f32, panel_extent: f32, viewport_extent: f32) -> f32 {
+    let margin = viewport_margin(viewport_extent);
+    let last = (viewport_extent - margin - panel_extent).max(margin);
+    let after = anchor + POPUP_POINTER_OFFSET;
+    let before = anchor - POPUP_POINTER_OFFSET - panel_extent;
+    if after <= last {
+        after.max(margin)
+    } else if before >= margin {
+        before.min(last)
+    } else {
+        after.clamp(margin, last)
+    }
 }
 
 fn context_submenu_geometry(
     root_left: f32,
     viewport_width: f32,
-    requested_root_width: f32,
+    root_width: f32,
     requested_child_width: f32,
 ) -> ViewMenuGeometry {
-    let margin = MENU_VIEWPORT_MARGIN.min((viewport_width / 4.0).max(0.0));
-    let usable_width = (viewport_width - margin * 2.0).max(0.0);
-    let root_column_width = requested_root_width.min(usable_width / 2.0);
+    let margin = viewport_margin(viewport_width);
     let left_space = (root_left - margin).max(0.0);
-    let right_space = (viewport_width - margin - root_left - root_column_width).max(0.0);
-    let child_side = if right_space >= left_space {
+    let right_space = (viewport_width - margin - root_left - root_width).max(0.0);
+    let child_side = if requested_child_width <= right_space || right_space >= left_space {
         ChildSide::Right
     } else {
         ChildSide::Left
@@ -144,7 +234,7 @@ fn context_submenu_geometry(
     };
     ViewMenuGeometry {
         root_left,
-        root_column_width,
+        root_column_width: root_width,
         child_column_width: requested_child_width.min(child_reservation),
         child_side,
     }
@@ -161,6 +251,40 @@ pub(super) struct MenuTitle {
 }
 
 impl FilerShell {
+    #[cfg(test)]
+    pub(super) fn context_menu_row_point_for_test(
+        &mut self,
+        cx: &mut Context<Self>,
+        matches_row: impl FnMut(&menu::Row) -> bool,
+    ) -> gpui::Point<gpui::Pixels> {
+        let open = self.menu.open().expect("open context menu");
+        let child = self.menu.view_submenu().is_some();
+        let (rows, separators) = if child {
+            (self.menu_rows(cx), Vec::new())
+        } else {
+            let root = self.context_menu_root_rows(self.menu_entries(cx));
+            (root.rows, root.separators)
+        };
+        let index = rows
+            .iter()
+            .position(matches_row)
+            .expect("rendered menu row");
+        let scroll = self.menu_panel_scroll(open, child);
+        let bounds = scroll.bounds();
+        let height = self.menu_row_height(open);
+        let point = gpui::point(
+            bounds.left() + px(24.0).min(bounds.size.width / 2.0),
+            bounds.top()
+                + scroll.offset().y
+                + px(menu_row_top(index, height, &separators) + height / 2.0),
+        );
+        assert!(
+            bounds.contains(&point),
+            "menu row {index} is outside {bounds:?}"
+        );
+        point
+    }
+
     /// メニューバーに並べるタイトル。幅を測るのはここ 1 回だけ。
     pub(super) fn menu_titles(&self, window: &Window) -> Vec<MenuTitle> {
         menu::Menu::ALL
@@ -322,7 +446,38 @@ impl FilerShell {
         Some(overlay)
     }
 
-    /// dropdown の面。dropdown はタイトルの真下、popup はポインタの位置。
+    pub(super) fn menu_row_height(&self, open: menu::Open) -> f32 {
+        match open {
+            menu::Open::Menu(menu::Menu::View) => VIEW_ROW_HEIGHT,
+            menu::Open::Popup(menu::Popup::ReopenTabs | menu::Popup::Workspace) => {
+                REOPEN_ROW_HEIGHT
+            }
+            menu::Open::Popup(menu::Popup::Item | menu::Popup::Background)
+                if self
+                    .menu_target
+                    .as_ref()
+                    .is_some_and(|target| target.touch_target) =>
+            {
+                TOUCH_CONTEXT_ROW_HEIGHT
+            }
+            _ => ROW_HEIGHT,
+        }
+    }
+
+    pub(super) fn menu_panel_scroll(&self, open: menu::Open, child: bool) -> &ScrollHandle {
+        if child {
+            return &self.view_menu_scroll;
+        }
+        match open {
+            menu::Open::Popup(menu::Popup::Item | menu::Popup::Background) => {
+                &self.context_popup_scroll
+            }
+            menu::Open::Popup(menu::Popup::ReopenTabs) => &self.reopen_scroll,
+            _ => &self.view_menu_root_scroll,
+        }
+    }
+
+    /// dropdown の面。dropdown はタイトルの真下、popup はポインタの近くに置く。
     fn render_menu_panel(
         &mut self,
         titles: &[MenuTitle],
@@ -331,265 +486,220 @@ impl FilerShell {
         viewport: gpui::Size<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) -> Option<gpui::Div> {
-        let view_menu = self.menu.open() == Some(menu::Open::Menu(menu::Menu::View));
+        let open = self.menu.open()?;
+        let view_menu = open == menu::Open::Menu(menu::Menu::View);
         let context_popup = matches!(
-            self.menu.open(),
-            Some(menu::Open::Popup(
-                menu::Popup::Item | menu::Popup::Background
-            ))
+            open,
+            menu::Open::Popup(menu::Popup::Item | menu::Popup::Background)
         );
         let submenu_root = view_menu || context_popup;
-        let child_rows = self.menu_rows(cx);
-        let rows = if view_menu {
-            self.view_menu_root_rows(cx)
+        let reopen_popup = open == menu::Open::Popup(menu::Popup::ReopenTabs);
+        let workspace_popup = open == menu::Open::Popup(menu::Popup::Workspace);
+        let (rows, separators) = if view_menu {
+            (self.view_menu_root_rows(cx), Vec::new())
         } else if context_popup {
-            self.context_menu_root_rows(self.menu_entries(cx))
+            let root = self.context_menu_root_rows(self.menu_entries(cx));
+            (root.rows, root.separators)
         } else {
-            child_rows.clone()
+            (self.menu_rows(cx), Vec::new())
         };
-        let requested_root_width = menu_column_width(&rows, window);
-        let requested_child_width = menu_column_width(&child_rows, window);
-        let touch_context_menu = matches!(
-            self.menu.open(),
-            Some(menu::Open::Popup(
-                menu::Popup::Item | menu::Popup::Background | menu::Popup::Workspace
-            ))
-        ) && self
-            .menu_target
-            .as_ref()
-            .is_some_and(|target| target.touch_target);
-        let tab_popup = matches!(
-            self.menu.open(),
-            Some(menu::Open::Popup(
-                menu::Popup::Tab | menu::Popup::ReopenTabs | menu::Popup::Workspace
-            ))
-        );
-        let reopen_popup = self.menu.open() == Some(menu::Open::Popup(menu::Popup::ReopenTabs));
-        let workspace_popup = self.menu.open() == Some(menu::Open::Popup(menu::Popup::Workspace));
-        let (left, top) = match popup_at {
-            Some(at) if context_popup => {
-                let row_height = if touch_context_menu {
-                    TOUCH_CONTEXT_ROW_HEIGHT
-                } else {
-                    ROW_HEIGHT
-                };
-                let content_height = rows.len() as f32 * row_height;
-                let panel_width = requested_root_width;
-                let max_left = (viewport.width.as_f32() - panel_width).max(0.0);
-                (
-                    at.x.as_f32().clamp(0.0, max_left),
-                    context_popup_top(at.y.as_f32(), viewport.height.as_f32(), content_height),
+        let child_open = submenu_root && self.menu.view_submenu().is_some();
+        let child_rows = if child_open {
+            self.menu_rows(cx)
+        } else {
+            Vec::new()
+        };
+        let view = self.menu_target.as_ref().and_then(|target| {
+            let (pane, tab) = self
+                .workspace
+                .active()
+                .pane_and_tab(target.tab, target.view?)?;
+            (target.workspace == self.workspace.active
+                && pane.id == target.pane
+                && pane.directory().active_tab_id == target.tab)
+                .then(|| tab.view.read(cx))
+        });
+        let focus = view.map(DirectoryListDemo::base_scopes);
+        let hover = view
+            .filter(|_| {
+                open == menu::Open::Popup(menu::Popup::Item)
+                    && self
+                        .menu_target
+                        .as_ref()
+                        .is_some_and(|target| !target.touch_target)
+                    && !focus
+                        .as_ref()
+                        .is_some_and(|scopes| scopes.contains(&input::scope::SECTION_FOCUS))
+            })
+            .map(DirectoryListDemo::item_path);
+        let keymap = self.keymap_runtime.snapshot();
+        let shortcut = |row: &menu::Row| {
+            let menu::Row::Leaf(entry) = row else {
+                return None;
+            };
+            keymap
+                .file_view
+                .key_for_action(
+                    entry.action,
+                    focus.as_deref()?,
+                    hover.as_ref().map(|path| path.scopes()),
                 )
-            }
-            Some(at) if tab_popup => {
-                // Shell root は overflow を clip するため、タブ menu は既知の寸法で
-                // viewport 内へ寄せる。余白があれば pointer anchor はそのまま保つ。
-                let panel_width = if reopen_popup {
-                    (viewport.width - px(16.0)).min(px(420.0)).max(px(0.0))
-                } else {
-                    px(PANEL_WIDTH)
-                };
-                let row_height = if reopen_popup {
-                    REOPEN_ROW_HEIGHT
-                } else if workspace_popup {
-                    REOPEN_ROW_HEIGHT
-                } else if view_menu {
-                    VIEW_ROW_HEIGHT
-                } else if touch_context_menu {
-                    TOUCH_CONTEXT_ROW_HEIGHT
-                } else {
-                    ROW_HEIGHT
-                };
-                let panel_height = px(rows.len() as f32 * row_height + 10.0);
-                let max_left = (viewport.width - panel_width).max(px(0.0));
-                let max_top = (viewport.height - panel_height).max(px(0.0));
+                .map(shortcut_label)
+        };
+        let root_shortcuts = rows.iter().map(shortcut).collect::<Vec<_>>();
+        let child_shortcuts = child_rows.iter().map(shortcut).collect::<Vec<_>>();
+        let requested_root_width = menu_column_width(&rows, &root_shortcuts, window);
+        let requested_child_width = menu_column_width(&child_rows, &child_shortcuts, window);
+        let row_height = self.menu_row_height(open);
+        let viewport_width = viewport.width.as_f32();
+        let viewport_height = viewport.height.as_f32();
+        let x_margin = viewport_margin(viewport_width);
+        let y_margin = viewport_margin(viewport_height);
+        let usable_width = viewport_width - 2.0 * x_margin;
+        let bottom = viewport_height - y_margin;
+        let minimum_top = if popup_at.is_some() {
+            y_margin
+        } else {
+            titlebar::HEIGHT
+        };
+        let available_height = (bottom - minimum_top).max(0.0);
+        if usable_width <= POPUP_PANEL_CHROME_HEIGHT
+            || available_height <= POPUP_PANEL_CHROME_HEIGHT
+        {
+            return None;
+        }
+        let root_height = (menu_row_top(rows.len(), row_height, &separators)
+            + POPUP_PANEL_CHROME_HEIGHT)
+            .min(available_height);
+        let (left, top, width, geometry) = if let Some(at) = popup_at {
+            let requested_width = if reopen_popup {
+                420.0
+            } else {
+                requested_root_width
+            };
+            // 分岐を開いたときも親の位置と幅を保ち、隣に子列を置く余地を残す。
+            let has_branch = rows
+                .iter()
+                .any(|row| matches!(row, menu::Row::Branch { .. }));
+            let width_limit = if has_branch {
+                usable_width / 2.0
+            } else {
+                usable_width
+            };
+            let width = requested_width.min(width_limit);
+            let left = popup_position(at.x.as_f32(), width, viewport_width);
+            let top = popup_position(at.y.as_f32(), root_height, viewport_height);
+            let geometry = child_open.then(|| {
+                context_submenu_geometry(left, viewport_width, width, requested_child_width)
+            });
+            (left, top, width, geometry)
+        } else {
+            let menu = self.menu.open_menu()?;
+            let index = menu::Menu::ALL.iter().position(|item| *item == menu)?;
+            // メニューバーの横スクロール後も、見えているタイトルを基準にする。
+            let anchor = title_x(titles, index) + self.menu_scroll.offset().x.as_f32();
+            if view_menu {
+                let geometry = view_menu_geometry(
+                    anchor,
+                    viewport_width,
+                    requested_root_width,
+                    requested_child_width,
+                );
                 (
-                    at.x.min(max_left).max(px(0.0)).as_f32(),
-                    at.y.min(max_top).max(px(0.0)).as_f32(),
+                    geometry.root_left,
+                    minimum_top,
+                    geometry.root_column_width,
+                    Some(geometry),
                 )
-            }
-            Some(at) => (at.x.as_f32(), at.y.as_f32()),
-            None => {
-                let menu = self.menu.open_menu()?;
-                let index = menu::Menu::ALL.iter().position(|item| *item == menu)?;
-                // バーが横スクロールしていれば、見えている左端もその分ずれる。
-                let anchor = title_x(titles, index) + self.menu_scroll.offset().x.as_f32();
-                let left = if view_menu {
-                    view_menu_geometry(
-                        anchor,
-                        viewport.width.as_f32(),
-                        requested_root_width,
-                        requested_child_width,
-                    )
-                    .root_left
-                } else {
-                    anchor.max(0.0)
-                };
-                (left, titlebar::HEIGHT)
+            } else {
+                let width = requested_root_width.min(usable_width);
+                let left =
+                    anchor.clamp(x_margin, (viewport_width - x_margin - width).max(x_margin));
+                (left, minimum_top, width, None)
             }
         };
-        let highlighted = if submenu_root && self.menu.view_submenu().is_some() {
+        let palette = gpui_filer_ui::theme_palette(cx);
+        let root_scroll = self.menu_panel_scroll(open, false).clone();
+        let mut row_panel = div()
+            .id("shell-menu-rows")
+            .max_h(px(root_height - POPUP_PANEL_CHROME_HEIGHT))
+            .overflow_y_scroll()
+            .track_scroll(&root_scroll);
+        let highlighted = if child_open {
             Some(self.menu.parent_highlight_index())
         } else {
             self.menu.active_highlight()
         };
-        let root_row_height = if view_menu {
-            VIEW_ROW_HEIGHT
-        } else if touch_context_menu {
-            TOUCH_CONTEXT_ROW_HEIGHT
-        } else if reopen_popup || workspace_popup {
-            REOPEN_ROW_HEIGHT
-        } else {
-            ROW_HEIGHT
-        };
-        let view_geometry = submenu_root.then(|| {
-            if context_popup {
-                context_submenu_geometry(
-                    left,
-                    viewport.width.as_f32(),
-                    requested_root_width,
-                    requested_child_width,
-                )
-            } else {
-                view_menu_geometry(
-                    left,
-                    viewport.width.as_f32(),
-                    requested_root_width,
-                    requested_child_width,
-                )
+        for (index, (row, shortcut)) in rows.into_iter().zip(root_shortcuts).enumerate() {
+            if separators.contains(&index) {
+                row_panel = row_panel.child(
+                    div()
+                        .h(px(MENU_SEPARATOR_HEIGHT))
+                        .px(px(MENU_ROW_PADDING_X))
+                        .flex()
+                        .items_center()
+                        .child(div().h(px(1.0)).w_full().bg(popup_border(palette))),
+                );
             }
-        });
-        // コンテキストメニューの親列は pointer anchor に固定し、子列を開いても動かさない。
-        let root_width = view_geometry.map_or(PANEL_WIDTH, |geometry| geometry.root_column_width);
-        let available_view_height = if context_popup {
-            (viewport.height.as_f32() - 10.0).max(VIEW_ROW_HEIGHT)
-        } else {
-            (viewport.height.as_f32() - titlebar::HEIGHT - MENU_VIEWPORT_MARGIN - 10.0)
-                .max(VIEW_ROW_HEIGHT)
-        };
-        let mut panel = div()
-            .absolute()
-            .top(px(top))
-            .left(px(left))
-            .when(reopen_popup, |element| {
-                let width = (viewport.width - px(16.0)).min(px(420.0)).max(px(0.0));
-                element.w(width).min_w(width).max_w(width)
-            })
-            .when(!reopen_popup, |element| {
-                if submenu_root {
-                    element
-                        .w(px(root_width))
-                        .min_w(px(root_width))
-                        .max_w(px(root_width))
-                } else {
-                    element.min_w(px(PANEL_WIDTH))
-                }
-            })
-            .py(px(4.0))
-            .flex()
-            .flex_col()
-            .text_size(px(CHROME_FONT_SIZE))
-            .rounded(px(RADIUS_SM))
-            .border_1()
-            .border_color(gpui_filer_ui::theme_palette(cx).border)
-            .bg(gpui_filer_ui::theme_palette(cx).surface_raised)
-            .occlude();
-        let mut row_panel = div().id("shell-menu-rows");
-        if context_popup {
-            row_panel = row_panel
-                .max_h((viewport.height - px(POPUP_PANEL_CHROME_HEIGHT)).max(px(0.0)))
-                .overflow_y_scroll()
-                .track_scroll(&self.context_popup_scroll);
-        } else if reopen_popup {
-            row_panel = row_panel
-                .max_h((viewport.height - px(24.0)).max(px(0.0)))
-                .overflow_y_scroll()
-                .track_scroll(&self.reopen_scroll);
-        } else if view_menu {
-            row_panel = row_panel
-                .max_h(px(available_view_height))
-                .overflow_y_scroll()
-                .track_scroll(&self.view_menu_root_scroll);
-        }
-        for (index, row) in rows.into_iter().enumerate() {
             row_panel = row_panel.child(self.render_menu_row(
                 index,
                 row,
                 highlighted,
-                root_row_height,
+                row_height,
                 (reopen_popup || submenu_root || workspace_popup).then_some(index),
                 submenu_root,
+                shortcut,
                 cx,
             ));
         }
-        panel = panel.child(row_panel);
-        if submenu_root && self.menu.view_submenu().is_some() {
-            let geometry = view_geometry.expect("View menu geometry is present");
-            let child_width = px(geometry.child_column_width);
-            let root_scroll = if view_menu {
-                self.view_menu_root_scroll.offset().y.as_f32()
-            } else {
-                self.context_popup_scroll.offset().y.as_f32()
-            };
-            let child_row_height = if view_menu {
-                VIEW_ROW_HEIGHT
-            } else if touch_context_menu {
-                TOUCH_CONTEXT_ROW_HEIGHT
-            } else {
-                ROW_HEIGHT
-            };
-            let child_height = (child_rows.len() as f32 * child_row_height + 10.0)
-                .min(available_view_height + 10.0);
+        let panel = popup_panel(palette)
+            .top(px(top))
+            .left(px(left))
+            .w(px(width))
+            .child(row_panel);
+        let mut panels = div().absolute().inset_0().child(panel);
+        if let Some(geometry) = geometry.filter(|_| child_open) {
+            let child_height = (menu_row_top(child_rows.len(), row_height, &[])
+                + POPUP_PANEL_CHROME_HEIGHT)
+                .min(available_height);
+            // どちらの面も overlay 基準で置き、両方の行の内側が揃うようにする。
             let child_anchor = top
-                + 4.0
-                + self.menu.parent_highlight_index() as f32 * child_row_height
-                + root_scroll;
-            let minimum_child_top = if context_popup { 0.0 } else { titlebar::HEIGHT };
-            let child_top = child_anchor.clamp(
-                minimum_child_top,
-                (viewport.height.as_f32() - child_height).max(minimum_child_top),
-            );
-            let left_delta = match geometry.child_side {
-                ChildSide::Right => geometry.root_column_width,
-                ChildSide::Left => -geometry.child_column_width,
+                + menu_row_top(self.menu.parent_highlight_index(), row_height, &separators)
+                + root_scroll.offset().y.as_f32();
+            let child_top =
+                child_anchor.clamp(minimum_top, (bottom - child_height).max(minimum_top));
+            let child_left = match geometry.child_side {
+                ChildSide::Right => left + width,
+                ChildSide::Left => left - geometry.child_column_width,
             };
-            let mut child_panel = div()
-                .id("shell-view-submenu")
-                .absolute()
-                .top(px(child_top - top))
-                .left(px(left_delta))
-                .w(child_width)
-                .min_w(child_width)
-                .max_w(child_width)
-                .py(px(4.0))
-                .flex()
-                .flex_col()
-                .text_size(px(CHROME_FONT_SIZE))
-                .rounded(px(RADIUS_SM))
-                .border_1()
-                .border_color(gpui_filer_ui::theme_palette(cx).border)
-                .bg(gpui_filer_ui::theme_palette(cx).surface_raised)
-                .occlude();
-            let mut child_rows_panel = div().id("shell-view-submenu-rows");
-            child_rows_panel = child_rows_panel
-                .max_h(px(available_view_height))
+            let mut child_rows_panel = div()
+                .id("shell-view-submenu-rows")
+                .max_h(px(child_height - POPUP_PANEL_CHROME_HEIGHT))
                 .overflow_y_scroll()
-                .track_scroll(&self.view_menu_scroll);
-            for (index, row) in child_rows.into_iter().enumerate() {
+                .track_scroll(self.menu_panel_scroll(open, true));
+            for (index, (row, shortcut)) in child_rows.into_iter().zip(child_shortcuts).enumerate()
+            {
                 child_rows_panel = child_rows_panel.child(self.render_menu_row(
                     index,
                     row,
                     self.menu.active_highlight(),
-                    child_row_height,
+                    row_height,
                     Some(index),
                     false,
+                    shortcut,
                     cx,
                 ));
             }
-            child_panel = child_panel.child(child_rows_panel);
-            panel = panel.child(child_panel);
+            panels = panels.child(
+                popup_panel(palette)
+                    .id("shell-view-submenu")
+                    .top(px(child_top))
+                    .left(px(child_left))
+                    .w(px(geometry.child_column_width))
+                    .child(child_rows_panel),
+            );
         }
-        Some(panel)
+        Some(panels)
     }
 
     /// dropdown の 1 行。
@@ -601,6 +711,7 @@ impl FilerShell {
         row_height: f32,
         row_index: Option<usize>,
         root_view: bool,
+        shortcut: Option<String>,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let label = row.label().to_owned();
@@ -608,12 +719,36 @@ impl FilerShell {
             menu::Row::Leaf(entry) => entry.enabled,
             menu::Row::Info { .. } | menu::Row::Theme { .. } | menu::Row::Branch { .. } => true,
         };
-        let checked = row.checked();
         let action = match &row {
             menu::Row::Leaf(entry) => Some(entry.action),
             _ => None,
         };
         let branch = matches!(row, menu::Row::Branch { .. });
+        let info = matches!(row, menu::Row::Info { .. });
+        let icon = if row.checked() {
+            Some(IconId::Check)
+        } else if matches!(
+            row,
+            menu::Row::Branch {
+                submenu: menu::ViewSubmenu::Creation,
+                ..
+            }
+        ) {
+            Some(IconId::Add)
+        } else {
+            action.and_then(action_icon)
+        };
+        let palette = gpui_filer_ui::theme_palette(cx);
+        let text_color = if !enabled || info {
+            palette.text_muted
+        } else {
+            palette.text
+        };
+        let highlight_color = if root_view && self.menu.view_submenu().is_some() {
+            palette.chrome_hover_strong
+        } else {
+            palette.chrome_hover
+        };
         let highlightable = enabled;
         div()
             .id(("menu-row", index))
@@ -622,27 +757,38 @@ impl FilerShell {
             .flex()
             .items_center()
             .gap(px(MENU_ROW_GAP))
-            .text_color(gpui_filer_ui::theme_palette(cx).text)
+            .rounded(px(6.0))
+            .text_color(text_color)
             // 選ばれている行は一つだけ。使えない行でも印を出す。
             // 印が出ないと、キーで動かした先が読めない。
             .when(highlighted == Some(index), |element| {
-                element.bg(gpui_filer_ui::theme_palette(cx).chrome_hover)
+                element.bg(highlight_color)
             })
-            .when(!enabled, |element| {
-                element.text_color(gpui_filer_ui::theme_palette(cx).text_muted)
-            })
-            .child(if checked {
-                Icon::new(IconId::Check).size(px(16.0)).into_any_element()
-            } else {
-                div().w(px(16.0)).flex_shrink_0().into_any_element()
-            })
+            .child(
+                div()
+                    .w(px(MENU_ICON_SIZE))
+                    .flex_shrink_0()
+                    .children(icon.map(|icon| {
+                        Icon::new(icon)
+                            .size(px(MENU_ICON_SIZE))
+                            .color(text_color.into())
+                    })),
+            )
             .child(div().min_w_0().flex_1().truncate().child(label))
+            .children(shortcut.map(|label| {
+                div()
+                    .max_w(gpui::relative(0.45))
+                    .text_size(px(SHORTCUT_FONT_SIZE))
+                    .text_color(palette.text_muted)
+                    .truncate()
+                    .child(label)
+            }))
             .when(branch, |element| {
                 element.child(
                     div().flex_shrink_0().child(
                         Icon::new(IconId::Expand)
-                            .size(px(MENU_ROW_BRANCH_ICON_WIDTH))
-                            .color(gpui_filer_ui::theme_palette(cx).text_muted.into()),
+                            .size(px(MENU_ICON_SIZE))
+                            .color(palette.text.into()),
                     ),
                 )
             })
@@ -684,15 +830,19 @@ impl FilerShell {
 ///
 /// 文字列に固定幅を仮定しない。翻訳でラベルが伸びても、タイトルと dropdown が一緒に動く。
 fn title_width(label: &str, window: &Window) -> f32 {
+    (text_width(label, CHROME_FONT_SIZE, window) + TITLE_PADDING_X * 2.0).max(TITLE_MIN_WIDTH)
+}
+
+fn text_width(label: &str, font_size: f32, window: &Window) -> f32 {
     let style = window.text_style();
     let shaped = window.text_system().shape_text(
         label.to_string().into(),
-        px(CHROME_FONT_SIZE),
+        px(font_size),
         &[style.to_run(label.len())],
         None,
         None,
     );
-    let text = shaped
+    shaped
         .ok()
         .map(|lines| {
             lines
@@ -700,8 +850,7 @@ fn title_width(label: &str, window: &Window) -> f32 {
                 .map(|line| line.width().as_f32())
                 .fold(0.0, f32::max)
         })
-        .unwrap_or(0.0);
-    (text + TITLE_PADDING_X * 2.0).max(TITLE_MIN_WIDTH)
+        .unwrap_or(0.0)
 }
 
 /// dropdown の左端。バーの左端（ハンバーガーの右）から、その menu までの幅を足す。
@@ -796,19 +945,31 @@ mod geometry_tests {
     }
 
     #[test]
-    fn context_popup_clamps_near_bottom_and_scroll_reveals_last_touch_row() {
-        let content_height = 10.0 * TOUCH_CONTEXT_ROW_HEIGHT;
-        assert_eq!(context_popup_top(390.0, 400.0, content_height), 0.0);
-        let viewport_height = 300.0;
-        let top = reveal_scroll_offset(
-            0.0,
-            9.0 * TOUCH_CONTEXT_ROW_HEIGHT,
-            TOUCH_CONTEXT_ROW_HEIGHT,
-            viewport_height,
-            content_height,
-        );
+    fn context_popup_offsets_flips_and_clamps_with_the_same_panel_extent() {
+        assert_eq!(popup_position(120.0, 176.0, 600.0), 132.0);
+        assert_eq!(popup_position(590.0, 176.0, 600.0), 402.0);
+        assert_eq!(popup_position(200.0, 384.0, 400.0), 8.0);
+        let child = context_submenu_geometry(402.0, 600.0, 176.0, 220.0);
+        assert_eq!(child.root_left, 402.0);
+        assert_eq!(child.root_column_width, 176.0);
+        assert_eq!(child.child_column_width, 220.0);
+        assert_eq!(child.child_side, ChildSide::Left);
+    }
+
+    #[test]
+    fn separators_count_toward_submenu_anchors_and_keyboard_reveal() {
+        let row_height = TOUCH_CONTEXT_ROW_HEIGHT;
+        let separators = [2, 5];
+        assert_eq!(menu_row_top(1, row_height, &separators), 44.0);
+        assert_eq!(menu_row_top(2, row_height, &separators), 97.0);
+        let last_row = menu_row_top(9, row_height, &separators);
+        let content_height = menu_row_top(10, row_height, &separators);
+        assert_eq!(last_row, 414.0);
+        assert_eq!(content_height, 458.0);
+        let viewport_height = 400.0 - 2.0 * MENU_VIEWPORT_MARGIN - POPUP_PANEL_CHROME_HEIGHT;
+        let top = reveal_scroll_offset(0.0, last_row, row_height, viewport_height, content_height);
         assert_eq!(top, content_height - viewport_height);
-        assert!(9.0 * TOUCH_CONTEXT_ROW_HEIGHT >= top);
-        assert!(10.0 * TOUCH_CONTEXT_ROW_HEIGHT <= top + viewport_height);
+        assert!(last_row >= top);
+        assert!(last_row + row_height <= top + viewport_height);
     }
 }
