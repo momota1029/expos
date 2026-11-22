@@ -1,4 +1,4 @@
-//! Windows での置換と、保存先のパス。
+//! Windows での置換。
 //!
 //! `std::fs::rename` は `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` を呼ぶだけで、
 //! `MOVEFILE_WRITE_THROUGH` を付けない。上書きはできても、crash durability を
@@ -9,7 +9,8 @@
 //! 一時ファイルだけを片付ける。読み手に中途半端な JSON を見せないため、置換は
 //! 同じ directory の一時ファイルから行う。
 
-use super::MAX_SNAPSHOT_BYTES;
+use super::file::WriteFailure;
+use super::{MAX_SNAPSHOT_BYTES, SessionPaths};
 use std::path::{Path, PathBuf};
 
 const REPLACE_RETRY_DELAYS: [std::time::Duration; 3] = [
@@ -17,57 +18,6 @@ const REPLACE_RETRY_DELAYS: [std::time::Duration; 3] = [
     std::time::Duration::from_millis(20),
     std::time::Duration::from_millis(40),
 ];
-
-/// 保存先の組。同じ directory に置き、別 volume をまたぐ置換をしない。
-#[derive(Clone, Debug)]
-pub(crate) struct SessionPaths {
-    pub primary: PathBuf,
-    pub backup: PathBuf,
-}
-
-impl SessionPaths {
-    pub(crate) fn new(primary: PathBuf) -> Self {
-        let name = primary
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "session.json".to_string());
-        let backup = primary.with_file_name(format!("{name}.bak"));
-        Self { primary, backup }
-    }
-
-    /// `%LOCALAPPDATA%/gpui-filer/v6/session/session-v1.json`。
-    ///
-    /// v5 の設定ファイルを上書き・流用しない。
-    pub(crate) fn default_for_app() -> Option<Self> {
-        crate::app_paths::session_file().map(Self::new)
-    }
-}
-
-/// 置換のどこで失敗したか。
-///
-/// stderr だけで成功扱いにしないための材料。呼び出し側が可視の診断に使う。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum WriteFailure {
-    /// 一時ファイルの作成・書き込み・flush。
-    Temporary(String),
-    /// platform の置換。primary は変わっていない。
-    Replace { code: Option<u32>, message: String },
-    /// 一時ファイルを片付けられなかった。
-    Cleanup(String),
-}
-
-impl std::fmt::Display for WriteFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Temporary(reason) => write!(f, "temporary file: {reason}"),
-            Self::Replace { code, message } => match code {
-                Some(code) => write!(f, "replace failed ({code}): {message}"),
-                None => write!(f, "replace failed: {message}"),
-            },
-            Self::Cleanup(reason) => write!(f, "cleanup: {reason}"),
-        }
-    }
-}
 
 /// 置換の手順。`persistence.rs` とテストから使う。
 pub(crate) struct SessionFile {
@@ -78,6 +28,8 @@ pub(crate) struct SessionFile {
 }
 
 impl SessionFile {
+    pub(crate) const WRITES_SUPPORTED: bool = true;
+
     pub(crate) fn new(paths: SessionPaths) -> Self {
         Self {
             paths,
@@ -220,12 +172,6 @@ fn is_retryable_replace_failure(failure: &WriteFailure) -> bool {
     // HRESULT_FROM_WIN32 for sharing/lock violation and ERROR_UNABLE_TO_REMOVE_REPLACED.
     // 1176/1177 can leave namespace names in a different arrangement, so they stay fail-closed.
     matches!(*code, 0x8007_0020 | 0x8007_0021 | 0x8007_0497)
-}
-
-impl super::SessionSink for SessionFile {
-    fn write(&mut self, bytes: &[u8]) -> Result<(), String> {
-        self.replace(bytes).map_err(|failure| failure.to_string())
-    }
 }
 
 impl WriteFailure {

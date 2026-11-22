@@ -12,7 +12,17 @@
 //! 保存する path は lossless に運ぶ。`to_string_lossy` を通すと孤立 surrogate が
 //! 置換文字になり、保存したつもりの path が復元できない。
 
-pub(crate) mod windows;
+mod file;
+#[cfg(not(windows))]
+mod unsupported;
+#[cfg(windows)]
+mod windows;
+
+pub(crate) use file::SessionPaths;
+#[cfg(not(windows))]
+pub(crate) use unsupported::SessionFile;
+#[cfg(windows)]
+pub(crate) use windows::SessionFile;
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -2075,6 +2085,12 @@ fn legacy_active(active: Option<u64>, keys: &[u64]) -> Option<u64> {
 pub trait SessionSink {
     /// 全内容を書く。失敗の理由は可視の診断に使う。
     fn write(&mut self, bytes: &[u8]) -> Result<(), String>;
+}
+
+impl SessionSink for SessionFile {
+    fn write(&mut self, bytes: &[u8]) -> Result<(), String> {
+        self.replace(bytes).map_err(|failure| failure.to_string())
+    }
 }
 
 /// 直列 writer。待機中の要求は最新一つへ畳む。

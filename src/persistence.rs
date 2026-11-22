@@ -8,10 +8,9 @@
 //! 保存する rect は logical pixels。display の `visible_bounds` も logical なので、
 //! そのまま比べられる。
 
-use super::session_store::windows::{SessionFile, SessionPaths};
 use super::session_store::{
     self, AsyncOrderedWriter, BoundsValue, RestoreOutcome, SAVE_DEBOUNCE, SAVE_DEBOUNCE_CAP,
-    SessionSnapshot, WindowSnapshot, should_write,
+    SessionFile, SessionPaths, SessionSnapshot, WindowSnapshot, should_write,
 };
 use gpui::{App, Bounds, DisplayId, Pixels, Window, WindowBounds, point, px, size};
 use std::time::Instant;
@@ -566,6 +565,13 @@ pub(super) fn open() -> (Startup, SessionAutosaveOwner, FolderPreferencesOwner) 
 }
 
 fn open_session() -> SessionOpen {
+    if !SessionFile::WRITES_SUPPORTED {
+        return SessionOpen {
+            notice: None,
+            restore: None,
+            autosave: None,
+        };
+    }
     let Some(paths) = SessionPaths::default_for_app() else {
         return SessionOpen {
             notice: Some(NO_LOCATION.into()),

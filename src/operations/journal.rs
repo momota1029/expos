@@ -6,7 +6,7 @@
 //! may inspect/discard it, but this module never replays it.
 
 use super::model::{AttemptSnapshot, JobSnapshot, OperationKind};
-use crate::session_store::windows::{SessionFile, SessionPaths};
+use crate::session_store::{SessionFile, SessionPaths};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -2623,9 +2623,12 @@ impl JournalStore {
     pub fn attempt(&self, key: &str) -> Option<&JournalAttempt> {
         self.document.attempts.iter().find(|attempt| attempt.key == key)
     }
-    /// `None` means only that app-data has no location. Corrupt and future
-    /// journals reach the Shell as a diagnostic and are never overwritten.
+    /// `None` means durable storage is unavailable or app-data has no location.
+    /// Corrupt and future journals reach the Shell as a diagnostic and are never overwritten.
     pub fn open_for_app() -> Result<Option<Self>, String> {
+        if !SessionFile::WRITES_SUPPORTED {
+            return Ok(None);
+        }
         let Some(root) = crate::app_paths::root() else {
             return Ok(None);
         };
@@ -2641,7 +2644,7 @@ impl JournalStore {
         Self::open_with_file(file)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, windows))]
     pub(crate) fn open_with_partial_write_fault(
         path: PathBuf,
         fault: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -8384,6 +8387,7 @@ mod tests {
         assert!(validate_copy_directory_stage_evidence(&oversized).is_err());
     }
 
+    #[cfg(windows)]
     #[test]
     fn retained_copy_stage_projection_requires_one_exact_unknown_receipt_mapping() {
         use std::os::windows::ffi::OsStrExt;

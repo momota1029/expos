@@ -12584,6 +12584,9 @@ impl FilerShell {
         clean_shutdown: bool,
         cx: &mut Context<Self>,
     ) -> Result<Option<SessionSnapshot>, String> {
+        if !session_store::SessionFile::WRITES_SUPPORTED {
+            return Ok(None);
+        }
         let Some(mut aggregate) = self.capture_local(window, clean_shutdown, cx)? else {
             return Ok(None);
         };
@@ -12836,6 +12839,9 @@ impl FilerShell {
         _window: &Window,
         cx: &mut Context<Self>,
     ) -> Result<Option<SessionSnapshot>, String> {
+        if !session_store::SessionFile::WRITES_SUPPORTED {
+            return Ok(None);
+        }
         let registrations =
             cx.read_global::<window_coordinator::WindowCoordinator, _>(|owner, _| {
                 owner.registrations()
