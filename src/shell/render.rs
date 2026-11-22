@@ -193,7 +193,7 @@ impl Render for FilerShell {
             .iter()
             .map(|tab| {
                 let location = tab.view.read(cx).location();
-                TabLabel {
+                let label = TabLabel {
                     id: tab.id,
                     // PC は path を持たないので、タブ名は i18n の PC を使う。
                     title: match &location {
@@ -224,7 +224,17 @@ impl Render for FilerShell {
                     .into(),
                     disambiguation: None,
                     locked: tab.locked,
+                };
+                #[cfg(target_os = "linux")]
+                if let Some(location) = location.as_ref().and_then(|location| {
+                    crate::headless_shot::DisplayRoot::tab_location(location, cx)
+                }) {
+                    return TabLabel {
+                        location: location.into(),
+                        ..label
+                    };
                 }
+                label
             })
             .collect();
         let hints = pinned_tab_disambiguation_hints(&labels);
@@ -1809,7 +1819,13 @@ impl FilerShell {
         let location = item
             .path
             .parent()
-            .map(|path| path.display().to_string())
+            .map(|path| {
+                #[cfg(target_os = "linux")]
+                if let Some(path) = crate::headless_shot::DisplayRoot::relative_path(path, cx) {
+                    return path.display().to_string();
+                }
+                path.display().to_string()
+            })
             .unwrap_or_else(|| "-".to_string());
         body = body
             .child(

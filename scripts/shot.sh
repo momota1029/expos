@@ -33,7 +33,14 @@ PYTHON
 
 if [[ ${1-} != --run-under-timeout ]]; then
     [[ $(uname -s) == Linux ]] || fail_usage 'scripts/shot.sh requires Linux.'
-    [[ $# -ge 2 && $# -le 3 ]] || fail_usage 'usage: scripts/shot.sh <fixture-dir> <scenario.json> [out-dir]'
+    usage='usage: scripts/shot.sh [--repeat 2] <fixture-dir> <scenario.json> [out-dir]'
+    repeat=false
+    if [[ ${1-} == --repeat ]]; then
+        [[ ${2-} == 2 ]] || fail_usage "$usage"
+        repeat=true
+        shift 2
+    fi
+    [[ $# -ge 2 && $# -le 3 ]] || fail_usage "$usage"
 
     fixture=$(realpath -e -- "$1") && [[ -d $fixture ]] || fail_usage "Invalid fixture directory: $1"
     scenario=$(realpath -e -- "$2") && [[ -f $scenario ]] || fail_usage "Invalid scenario file: $2"
@@ -48,38 +55,71 @@ if [[ ${1-} != --run-under-timeout ]]; then
 
     require timeout
     require python3
+    if [[ $repeat == true ]]; then
+        require convert
+    fi
     check_xvfb_socket
     umask 077
     run=$(mktemp -d "$temp_root/expos-shot.XXXXXXXX")
     cleanup() {
         local status=$?
-        if (( status != 0 )) && [[ -s $run/xvfb.log ]]; then
-            tail -n 20 -- "$run/xvfb.log" >&2
+        if (( status != 0 )); then
+            for log in "$run/xvfb.log" "$run"/pass-*/xvfb.log; do
+                if [[ -s $log ]]; then
+                    tail -n 20 -- "$log" >&2
+                fi
+            done
         fi
         rm -rf -- "$run"
     }
     trap cleanup EXIT
 
-    # Supervise the child group while keeping cleanup outside it, so a timeout
-    # or a TERM from the caller cannot interrupt removal of the private state.
-    timeout --kill-after=1s 900s "$BASH" "$0" --run-under-timeout "$run" "$fixture" "$scenario" "$out" &
-    child=$!
     stop_capture() {
-        kill -TERM "$child" 2>/dev/null || true
-        wait "$child" || true
+        if [[ -n ${child-} ]]; then
+            kill -TERM "$child" 2>/dev/null || true
+            wait "$child" || true
+        fi
         exit 1
     }
     trap stop_capture HUP INT TERM
-    if wait "$child"; then
+
+    capture() {
+        local capture_run=$1 capture_out=$2 status
+        # Keep cleanup outside the supervised group, even on timeout or TERM.
+        timeout --kill-after=1s 900s "$BASH" "$0" --run-under-timeout \
+            "$capture_run" "$fixture" "$scenario" "$capture_out" &
+        child=$!
+        if wait "$child"; then
+            status=0
+        else
+            status=$?
+        fi
+        child=
+        case $status in
+            0) return 0 ;;
+            2|77) return "$status" ;;
+            124|137) echo 'Headless capture exceeded the 900-second run deadline.' >&2 ;;
+        esac
+        return 1
+    }
+
+    if [[ $repeat == false ]]; then
+        capture "$run" "$out"
         exit 0
-    else
-        status=$?
     fi
-    case $status in
-        2|77) exit "$status" ;;
-        124|137) echo 'Headless capture exceeded the 900-second run deadline.' >&2 ;;
-    esac
-    exit 1
+
+    for pass in 1 2; do
+        capture_run=$(mktemp -d "$run/pass-$pass.XXXXXXXX")
+        capture "$capture_run" "$run/png-$pass" >/dev/null
+    done
+    python3 "$(dirname -- "$0")/../tests/shots/compare_pngs.py" "$run/png-1" "$run/png-2"
+    mkdir -p -- "$out"
+    for png in "$run/png-1"/*.png; do
+        name=${png##*/}
+        mv -fT -- "$png" "$out/$name"
+        printf '%s\n' "$out/$name"
+    done
+    exit 0
 fi
 [[ $# == 5 ]] || fail_usage 'Missing supervised capture arguments.'
 run=$2
@@ -109,6 +149,8 @@ unsafe_entry=$(find "$fixture" ! -type d ! -type f -print -quit)
 mkdir -p -- "$run"/{cache,config,data,fixture,fonts,home,link,runtime,state,tmp} "$out"
 cp -a -- "$fixture/." "$run/fixture/"
 chmod -R u+rwX -- "$run/fixture"
+# Git checkouts and generated fixtures can have different timestamps on disk.
+TZ=UTC find "$run/fixture" -exec touch -h -m -d '2020-01-02 03:04:05' -- {} +
 
 # Minimal installations may supply the runtime sonames only.
 for entry in xcb:1 xkbcommon:0 xkbcommon-x11:0; do

@@ -6,10 +6,8 @@
     {"action": "view", "mode": "rows"},
     {"action": "screenshot", "name": "rows"},
     {"action": "view", "mode": "tiles"},
-    {"action": "wait", "ms": 250},
     {"action": "screenshot", "name": "tiles"},
     {"action": "view", "mode": "icons"},
-    {"action": "wait", "ms": 250},
     {"action": "screenshot", "name": "icons"}
   ]
 }

@@ -1,0 +1,11 @@
+{
+  "comment": "fixture ルートと、その下のディレクトリのパンくず・タブを比較する。",
+  "steps": [
+    {"action": "size", "width": 1280, "height": 800},
+    {"action": "theme", "theme": "dark"},
+    {"action": "view", "mode": "rows"},
+    {"action": "screenshot", "name": "fixture-root"},
+    {"action": "navigate", "path": "projects/archive"},
+    {"action": "screenshot", "name": "fixture-nested"}
+  ]
+}

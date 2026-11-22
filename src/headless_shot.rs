@@ -17,13 +17,54 @@ use gpui::{
 };
 use serde::Deserialize;
 
-use crate::{AppIntent, ViewLayout, persistence::InitialWindow, shell::FilerShell};
+use crate::{AppIntent, Location, ViewLayout, persistence::InitialWindow, shell::FilerShell};
 
 type ShotResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 const STEP_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
 const DEFAULT_SIZE: (u32, u32) = (1280, 800);
+
+pub(super) struct DisplayRoot(PathBuf);
+
+impl gpui::Global for DisplayRoot {}
+
+impl DisplayRoot {
+    pub(super) fn breadcrumb_start(paths: &[PathBuf], cx: &App) -> Option<usize> {
+        let root = &cx.try_global::<Self>()?.0;
+        // path の前に PC の crumb が一つある。
+        paths
+            .iter()
+            .position(|path| path == root)
+            .map(|index| index + 1)
+    }
+
+    pub(super) fn relative_path(path: &Path, cx: &App) -> Option<PathBuf> {
+        let Self(root) = cx.try_global::<Self>()?;
+        let relative = path.strip_prefix(root).ok()?;
+        let mut display = PathBuf::from(root.file_name()?);
+        if !relative.as_os_str().is_empty() {
+            display.push(relative);
+        }
+        Some(display)
+    }
+
+    pub(super) fn tab_location(location: &Location, cx: &App) -> Option<String> {
+        match location {
+            Location::Path(path) => Some(
+                Self::relative_path(path, cx)?
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            Location::Archive { source, components } => Location::Archive {
+                source: Self::relative_path(source, cx)?,
+                components: components.clone(),
+            }
+            .display_address(),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Deserialize)]
 struct Scenario {
@@ -154,6 +195,11 @@ impl Plan {
         &self.fixture
     }
 
+    pub(super) fn configure_app(&self, cx: &mut App) {
+        cx.set_reduce_motion(true);
+        cx.set_global(DisplayRoot(self.fixture.clone()));
+    }
+
     pub(super) fn initial_window(&self) -> InitialWindow {
         let (width, height) = self.initial_size;
         InitialWindow {
@@ -182,6 +228,7 @@ impl Plan {
             fixture: self.fixture,
             output: self.output,
         };
+        runner.clear_hover(cx)?;
         runner.frames(cx, deadline()).await?;
         for (index, step) in self.scenario.steps.into_iter().enumerate() {
             runner
@@ -212,6 +259,7 @@ impl Runner {
                     self.window(cx, |window, _| window.viewport_size() == wanted)
                 })
                 .await?;
+                self.clear_hover(cx)?;
                 self.frames(cx, until).await?;
             }
             Step::Theme { theme } => {
@@ -256,6 +304,7 @@ impl Runner {
             Step::Click { x, y } => {
                 self.frames(cx, until).await?;
                 self.window(cx, |window, cx| click(window, cx, x, y))??;
+                self.clear_hover(cx)?;
             }
             Step::Select { name } => {
                 self.wait_idle(cx, until).await?;
@@ -291,7 +340,13 @@ impl Runner {
                 self.frames(cx, until).await?;
             }
             Step::Screenshot { name } => {
+                self.clear_hover(cx)?;
                 self.wait_idle(cx, until).await?;
+                wait_until(cx, until, "visible thumbnails", |cx| {
+                    self.with_active_view(cx, |view, _, _| !view.shot_previews_pending)
+                })
+                .await?;
+                self.frames(cx, until).await?;
                 let target =
                     self.window(cx, |window, _| capture::Target::from_window(window))??;
                 let output = self.output.join(format!("{name}.png"));
@@ -312,6 +367,22 @@ impl Runner {
         update: impl FnOnce(&mut Window, &mut App) -> R,
     ) -> ShotResult<R> {
         Ok(cx.update_window(self.handle.into(), |_, window, cx| update(window, cx))?)
+    }
+
+    fn clear_hover(&self, cx: &mut AsyncApp) -> ShotResult<()> {
+        self.window(cx, |window, cx| {
+            // キーボード操作後は GPUI が hover を抑止する。focus-visible を維持する。
+            if window.last_input_was_keyboard() {
+                return;
+            }
+            window.dispatch_event(
+                PlatformInput::MouseMove(MouseMoveEvent {
+                    position: point(px(-1.), px(-1.)),
+                    ..Default::default()
+                }),
+                cx,
+            );
+        })
     }
 
     fn with_active_view<R>(

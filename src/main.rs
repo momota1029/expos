@@ -1206,6 +1206,8 @@ struct DirectoryListDemo {
     /// この view が今持っている表示用画像。path ごとの状態で持つ。
     /// 共有 cache ではなく projection なので、navigation で捨ててもよい。
     previews: std::collections::HashMap<std::path::PathBuf, PreviewState>,
+    #[cfg(target_os = "linux")]
+    shot_previews_pending: bool,
     /// パンくずの表示名を無効化した世代。F5 と overflow で進める。
     names_epoch: u64,
     list_hovered: bool,
@@ -5116,6 +5118,15 @@ impl DirectoryListDemo {
             };
             labels.push(label.into());
         }
+        #[cfg(target_os = "linux")]
+        let crumbs = if let Some(start) = headless_shot::DisplayRoot::breadcrumb_start(&paths, cx) {
+            let mut crumbs = crumbs;
+            crumbs.drain(..start);
+            labels.drain(..start);
+            crumbs
+        } else {
+            crumbs
+        };
         let viewport_width = self
             .measured_viewport_width
             .unwrap_or(self.pane_width_projection);
@@ -5713,6 +5724,10 @@ impl DirectoryListDemo {
     }
 
     fn prepare_previews(&mut self, size: u32, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(target_os = "linux")]
+        {
+            self.shot_previews_pending = false;
+        }
         // PC の行は drive や既知のフォルダで、中身の見本を作る対象ではない。
         // 切れた network drive を読みに行かないためにも、ここで止める。
         if self.layout == ViewLayout::Rows || self.is_this_pc() {
@@ -5818,6 +5833,10 @@ impl DirectoryListDemo {
         // 待合せに数えるのは未解決の項目だけ。`Unavailable` は終端なので
         // 数えない。数えると失敗した1枚が先読みを永久に止める。
         if pending > 0 {
+            #[cfg(target_os = "linux")]
+            {
+                self.shot_previews_pending = true;
+            }
             // visible request は `Window::use_asset` を通る。GPUI は asset の完了時に
             // この view だけを再描画するので、ここで polling しない。毎フレーム notify
             // すると、decode 待ちの間ずっと layout と preview projection を作り直してしまう。
@@ -6037,6 +6056,8 @@ impl DirectoryListDemo {
             shortcut_icon_projections: Default::default(),
             shortcut_icon_projection_order: Default::default(),
             previews: Default::default(),
+            #[cfg(target_os = "linux")]
+            shot_previews_pending: false,
             names_epoch: 0,
             list_hovered: false,
             scrollbar_drag: None,
@@ -17631,8 +17652,9 @@ fn main() {
             {
                 eprintln!("[v6][ole-trace] setup failed (open-or-writer)");
             }
-            if headless_requested {
-                cx.set_reduce_motion(true);
+            #[cfg(target_os = "linux")]
+            if let Some(plan) = &shot {
+                plan.configure_app(cx);
             }
             // 7-Zip は任意機能。PATH の検出は UI を止めず、結果だけを世代付きで commit する。
             let archive_provider = archive_provider::ArchiveProviderOwner::default();

@@ -13741,7 +13741,7 @@ impl FilerShell {
             .iter()
             .map(|(tab_id, view, locked)| {
                 let location = view.read(cx).location();
-                TabLabel {
+                let label = TabLabel {
                     id: *tab_id,
                     title: match &location {
                         Some(Location::Path(path)) => navigation::label(path),
@@ -13771,7 +13771,17 @@ impl FilerShell {
                     .into(),
                     disambiguation: None,
                     locked: *locked,
+                };
+                #[cfg(target_os = "linux")]
+                if let Some(location) = location.as_ref().and_then(|location| {
+                    crate::headless_shot::DisplayRoot::tab_location(location, cx)
+                }) {
+                    return TabLabel {
+                        location: location.into(),
+                        ..label
+                    };
                 }
+                label
             })
             .collect::<Vec<_>>();
         let hints = pinned_tab_disambiguation_hints(&labels);

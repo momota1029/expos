@@ -6,6 +6,8 @@ Copyright in expos original project code is held by expos contributors. That ori
 
 Archive browsing covers ZIP files and, when an optional 7-Zip provider is available, `.7z` files. Other archive formats are not generally supported.
 
+Interface controls use bundled Fluent UI System Icons across platforms. Their MIT license is in `crates/resources/assets/licenses/fluent-system/LICENSE` and `THIRD_PARTY_NOTICES.txt`.
+
 ## Build and run from source
 
 Install a Rust toolchain with Cargo and build from the repository root in PowerShell:

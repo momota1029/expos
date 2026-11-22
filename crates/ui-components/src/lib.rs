@@ -2,7 +2,7 @@ use gpui::{
     App, Hsla, IntoElement, ParentElement as _, Pixels, RenderOnce, Styled as _, Window, div,
     prelude::FluentBuilder as _, px, svg,
 };
-use gpui_filer_resources::{FLUENT_ICON_FONT, IconId, IconSource};
+use gpui_filer_resources::{IconId, IconSource};
 mod color_icon;
 mod folder_preview;
 pub use folder_preview::FolderPreview;
@@ -191,12 +191,6 @@ impl RenderOnce for Icon {
                     )
                     .into_any_element()
             }
-            IconSource::FluentGlyph(glyph) => container
-                .font_family(FLUENT_ICON_FONT)
-                .text_size(self.size)
-                .line_height(self.size)
-                .child(glyph.to_string())
-                .into_any_element(),
             IconSource::TextGlyph(glyph) => container
                 .text_size(self.size)
                 .line_height(self.size)

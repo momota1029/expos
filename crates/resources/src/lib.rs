@@ -3,7 +3,6 @@ use std::borrow::Cow;
 use anyhow::Result;
 use gpui::{AssetSource, SharedString};
 
-pub const FLUENT_ICON_FONT: &str = "Segoe Fluent Icons";
 pub const FLUENT11_LICENSE: &str = include_str!("../assets/licenses/fluent11/LICENSE");
 pub const FLUENT11_AUTHORS: &str = include_str!("../assets/licenses/fluent11/AUTHORS.txt");
 
@@ -77,7 +76,6 @@ pub enum IconId {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IconSource {
-    FluentGlyph(char),
     TextGlyph(char),
     Svg(&'static str),
     ColorSvg(&'static str),
@@ -160,41 +158,143 @@ impl IconId {
     pub const fn definition(self) -> IconDefinition {
         use IconId::*;
         let (name, source) = match self {
-            Menu => ("menu", IconSource::FluentGlyph('\u{E700}')),
-            Add => ("add", IconSource::FluentGlyph('\u{E710}')),
-            Close => ("close", IconSource::FluentGlyph('\u{E711}')),
-            Check => ("check", IconSource::FluentGlyph('\u{E73E}')),
-            ChevronUp => ("chevron-up", IconSource::FluentGlyph('\u{E70E}')),
-            ChevronDown => ("chevron-down", IconSource::FluentGlyph('\u{E70D}')),
-            Back => ("back", IconSource::FluentGlyph('\u{E72B}')),
-            Forward => ("forward", IconSource::FluentGlyph('\u{E72A}')),
-            Refresh => ("refresh", IconSource::FluentGlyph('\u{E72C}')),
-            Search => ("search", IconSource::FluentGlyph('\u{E721}')),
-            Open => ("open", IconSource::FluentGlyph('\u{E8A7}')),
-            Copy => ("copy", IconSource::FluentGlyph('\u{E8C8}')),
-            Cut => ("cut", IconSource::FluentGlyph('\u{E8C6}')),
-            Paste => ("paste", IconSource::FluentGlyph('\u{E77F}')),
-            Rename => ("rename", IconSource::FluentGlyph('\u{E8AC}')),
-            Delete => ("delete", IconSource::FluentGlyph('\u{E74D}')),
-            CopyPath => ("copy-path", IconSource::FluentGlyph('\u{E8C9}')),
-            Properties => ("properties", IconSource::FluentGlyph('\u{E946}')),
-            NewFolder => ("new-folder", IconSource::FluentGlyph('\u{E8F4}')),
-            NewFile => ("new-file", IconSource::FluentGlyph('\u{E8A5}')),
-            CreateLink => ("create-link", IconSource::FluentGlyph('\u{E71B}')),
-            SplitPane => ("split-pane", IconSource::FluentGlyph('\u{E7F4}')),
-            FolderTree => ("folder-tree", IconSource::FluentGlyph('\u{E768}')),
-            Expand => ("expand", IconSource::FluentGlyph('\u{E76C}')),
-            ReopenTab => ("reopen-tab", IconSource::FluentGlyph('\u{E777}')),
-            CloseOthers => ("close-others", IconSource::FluentGlyph('\u{E8BB}')),
-            Sort => ("sort", IconSource::FluentGlyph('\u{E8D4}')),
-            Calendar => ("calendar", IconSource::FluentGlyph('\u{E823}')),
-            Rows => ("rows", IconSource::FluentGlyph('\u{E8FD}')),
-            Tiles => ("tiles", IconSource::FluentGlyph('\u{E80A}')),
-            Lock => ("lock", IconSource::FluentGlyph('\u{E785}')),
-            Unlock => ("unlock", IconSource::FluentGlyph('\u{E718}')),
-            Warning => ("warning", IconSource::FluentGlyph('\u{E783}')),
+            Menu => (
+                "menu",
+                IconSource::Svg("icons/fluent-system/navigation_16_regular.svg"),
+            ),
+            Add => (
+                "add",
+                IconSource::Svg("icons/fluent-system/add_16_regular.svg"),
+            ),
+            Close => (
+                "close",
+                IconSource::Svg("icons/fluent-system/dismiss_16_regular.svg"),
+            ),
+            Check => (
+                "check",
+                IconSource::Svg("icons/fluent-system/checkmark_16_regular.svg"),
+            ),
+            ChevronUp => (
+                "chevron-up",
+                IconSource::Svg("icons/fluent-system/chevron_up_16_regular.svg"),
+            ),
+            ChevronDown => (
+                "chevron-down",
+                IconSource::Svg("icons/fluent-system/chevron_down_16_regular.svg"),
+            ),
+            Back => (
+                "back",
+                IconSource::Svg("icons/fluent-system/arrow_left_16_regular.svg"),
+            ),
+            Forward => (
+                "forward",
+                IconSource::Svg("icons/fluent-system/arrow_right_16_regular.svg"),
+            ),
+            Refresh => (
+                "refresh",
+                IconSource::Svg("icons/fluent-system/arrow_clockwise_16_regular.svg"),
+            ),
+            Search => (
+                "search",
+                IconSource::Svg("icons/fluent-system/search_16_regular.svg"),
+            ),
+            Open => (
+                "open",
+                IconSource::Svg("icons/fluent-system/open_16_regular.svg"),
+            ),
+            Copy => (
+                "copy",
+                IconSource::Svg("icons/fluent-system/copy_16_regular.svg"),
+            ),
+            Cut => (
+                "cut",
+                IconSource::Svg("icons/fluent-system/cut_16_regular.svg"),
+            ),
+            Paste => (
+                "paste",
+                IconSource::Svg("icons/fluent-system/clipboard_paste_16_regular.svg"),
+            ),
+            Rename => (
+                "rename",
+                IconSource::Svg("icons/fluent-system/rename_16_regular.svg"),
+            ),
+            Delete => (
+                "delete",
+                IconSource::Svg("icons/fluent-system/delete_16_regular.svg"),
+            ),
+            CopyPath => (
+                "copy-path",
+                IconSource::Svg("icons/fluent-system/clipboard_link_16_regular.svg"),
+            ),
+            Properties => (
+                "properties",
+                IconSource::Svg("icons/fluent-system/info_16_regular.svg"),
+            ),
+            NewFolder => (
+                "new-folder",
+                IconSource::Svg("icons/fluent-system/folder_add_16_regular.svg"),
+            ),
+            NewFile => (
+                "new-file",
+                IconSource::Svg("icons/fluent-system/document_add_16_regular.svg"),
+            ),
+            CreateLink => (
+                "create-link",
+                IconSource::Svg("icons/fluent-system/link_add_16_regular.svg"),
+            ),
+            SplitPane => (
+                "split-pane",
+                IconSource::Svg("icons/fluent-system/split_vertical_16_regular.svg"),
+            ),
+            FolderTree => (
+                "folder-tree",
+                IconSource::Svg("icons/fluent-system/list_bar_tree_offset_16_regular.svg"),
+            ),
+            Expand => (
+                "expand",
+                IconSource::Svg("icons/fluent-system/chevron_right_16_regular.svg"),
+            ),
+            ReopenTab => (
+                "reopen-tab",
+                IconSource::Svg("icons/fluent-system/tab_desktop_arrow_clockwise_16_regular.svg"),
+            ),
+            CloseOthers => (
+                "close-others",
+                IconSource::Svg("icons/fluent-system/dismiss_square_multiple_16_regular.svg"),
+            ),
+            Sort => (
+                "sort",
+                IconSource::Svg("icons/fluent-system/arrow_sort_16_regular.svg"),
+            ),
+            Calendar => (
+                "calendar",
+                IconSource::Svg("icons/fluent-system/calendar_16_regular.svg"),
+            ),
+            Rows => (
+                "rows",
+                IconSource::Svg("icons/fluent-system/list_16_regular.svg"),
+            ),
+            Tiles => (
+                "tiles",
+                IconSource::Svg("icons/fluent-system/grid_16_regular.svg"),
+            ),
+            Lock => (
+                "lock",
+                IconSource::Svg("icons/fluent-system/lock_closed_16_regular.svg"),
+            ),
+            Unlock => (
+                "unlock",
+                IconSource::Svg("icons/fluent-system/lock_open_16_regular.svg"),
+            ),
+            Warning => (
+                "warning",
+                IconSource::Svg("icons/fluent-system/warning_16_regular.svg"),
+            ),
             Play => ("play", IconSource::TextGlyph('\u{25B6}')),
-            FolderFallbackGlyph => ("folder-fallback-glyph", IconSource::FluentGlyph('\u{E8B7}')),
+            FolderFallbackGlyph => (
+                "folder-fallback-glyph",
+                IconSource::Svg("icons/fluent-system/folder_16_regular.svg"),
+            ),
             Libraries => (
                 "libraries",
                 IconSource::ColorSvg("icons/fluent11/places/folder-books.svg"),
@@ -304,7 +404,10 @@ impl IconId {
                 "folder-videos",
                 IconSource::ColorSvg("icons/fluent11/places/folder-videos.svg"),
             ),
-            Link => ("link", IconSource::FluentGlyph('\u{E71B}')),
+            Link => (
+                "link",
+                IconSource::Svg("icons/fluent-system/link_16_regular.svg"),
+            ),
         };
         IconDefinition { name, source }
     }
@@ -357,6 +460,113 @@ pub struct ResourceAssets;
 impl AssetSource for ResourceAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
         let bytes: Option<&'static [u8]> = match path {
+            "icons/fluent-system/add_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/add_16_regular.svg"
+            )),
+            "icons/fluent-system/arrow_clockwise_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/arrow_clockwise_16_regular.svg"
+            )),
+            "icons/fluent-system/arrow_left_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/arrow_left_16_regular.svg"
+            )),
+            "icons/fluent-system/arrow_right_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/arrow_right_16_regular.svg"
+            )),
+            "icons/fluent-system/arrow_sort_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/arrow_sort_16_regular.svg"
+            )),
+            "icons/fluent-system/calendar_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/calendar_16_regular.svg"
+            )),
+            "icons/fluent-system/checkmark_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/checkmark_16_regular.svg"
+            )),
+            "icons/fluent-system/chevron_down_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/chevron_down_16_regular.svg"
+            )),
+            "icons/fluent-system/chevron_right_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/chevron_right_16_regular.svg"
+            )),
+            "icons/fluent-system/chevron_up_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/chevron_up_16_regular.svg"
+            )),
+            "icons/fluent-system/clipboard_link_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/clipboard_link_16_regular.svg"
+            )),
+            "icons/fluent-system/clipboard_paste_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/clipboard_paste_16_regular.svg"
+            )),
+            "icons/fluent-system/copy_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/copy_16_regular.svg"
+            )),
+            "icons/fluent-system/cut_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/cut_16_regular.svg"
+            )),
+            "icons/fluent-system/delete_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/delete_16_regular.svg"
+            )),
+            "icons/fluent-system/dismiss_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/dismiss_16_regular.svg"
+            )),
+            "icons/fluent-system/dismiss_square_multiple_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/dismiss_square_multiple_16_regular.svg"
+            )),
+            "icons/fluent-system/document_add_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/document_add_16_regular.svg"
+            )),
+            "icons/fluent-system/folder_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/folder_16_regular.svg"
+            )),
+            "icons/fluent-system/folder_add_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/folder_add_16_regular.svg"
+            )),
+            "icons/fluent-system/grid_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/grid_16_regular.svg"
+            )),
+            "icons/fluent-system/info_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/info_16_regular.svg"
+            )),
+            "icons/fluent-system/link_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/link_16_regular.svg"
+            )),
+            "icons/fluent-system/link_add_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/link_add_16_regular.svg"
+            )),
+            "icons/fluent-system/list_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/list_16_regular.svg"
+            )),
+            "icons/fluent-system/list_bar_tree_offset_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/list_bar_tree_offset_16_regular.svg"
+            )),
+            "icons/fluent-system/lock_closed_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/lock_closed_16_regular.svg"
+            )),
+            "icons/fluent-system/lock_open_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/lock_open_16_regular.svg"
+            )),
+            "icons/fluent-system/navigation_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/navigation_16_regular.svg"
+            )),
+            "icons/fluent-system/open_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/open_16_regular.svg"
+            )),
+            "icons/fluent-system/rename_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/rename_16_regular.svg"
+            )),
+            "icons/fluent-system/search_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/search_16_regular.svg"
+            )),
+            "icons/fluent-system/split_vertical_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/split_vertical_16_regular.svg"
+            )),
+            "icons/fluent-system/tab_desktop_arrow_clockwise_16_regular.svg" => {
+                Some(include_bytes!(
+                    "../assets/icons/fluent-system/tab_desktop_arrow_clockwise_16_regular.svg"
+                ))
+            }
+            "icons/fluent-system/warning_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/warning_16_regular.svg"
+            )),
             "icons/fluent11/folder-layers/back.svg" => Some(include_bytes!(
                 "../assets/icons/fluent11/folder-layers/back.svg"
             )),
