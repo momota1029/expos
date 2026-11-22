@@ -100,7 +100,7 @@ fn prune_retains_newest_current_and_in_use() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     let current = install(root, "v1.0.0");
-    let running = install(root, "v1.1.0");
+    let running = install(root, "v1.1.0-alpha.dev.20261123T093012-0");
     let obsolete = install(root, "v1.2.0");
     let newest = install(root, "v1.3.0");
     let pin = File::open(running.executable(root)).unwrap();

@@ -5,6 +5,7 @@ use std::time::Duration;
 use gpui::{App, Global};
 use install_layout::{VersionDir, lock_install_root, read_current};
 
+use crate::install_info;
 use crate::shell::{Message, Translator};
 
 use super::settings::Settings;
@@ -24,11 +25,11 @@ struct Installation {
 
 impl Installation {
     fn from_env() -> Option<Self> {
-        let root = crate::install_info::install_root()?
+        let root = install_info::install_root()?
             .is_absolute()
             .then(|| install_layout::install_root().ok())??;
-        let launched = crate::install_info::version_dir().as_deref()
-            == Some(root.join(format!("v{RUNNING}")).as_path());
+        let launched = install_info::version_dir()
+            .is_some_and(|dir| install_info::is_running_version_dir(&root, &dir, RUNNING));
         let fixture = match std::env::var_os("EXPOS_UPDATE_SOURCE") {
             Some(value) => {
                 let path = value.to_str()?.strip_prefix("dir:")?;

@@ -58,6 +58,7 @@ pub(super) fn keymap_file() -> Option<PathBuf> {
 #[cfg(any(windows, test))]
 mod windows_data {
     use crate::channel::Channel;
+    use crate::install_info;
     use std::ffi::OsString;
     use std::fs::{self, File};
     use std::io::{self, Write};
@@ -81,8 +82,8 @@ mod windows_data {
                     std::env::var_os,
                     || {
                         Some((
-                            crate::install_info::install_root()?,
-                            crate::install_info::version_dir()?,
+                            install_info::install_root()?,
+                            install_info::version_dir()?,
                             std::env::current_exe().ok()?,
                         ))
                     },
@@ -136,7 +137,7 @@ mod windows_data {
         let legacy = local.join("gpui-filer").join("v6");
         if let Some((install_root, version_dir, exe)) = installation()
             && install_root.is_absolute()
-            && is_launched_version(&install_root, &version_dir, version)
+            && install_info::is_running_version_dir(&install_root, &version_dir, version)
             && let Some(exe_dir) = exe.parent().filter(|dir| dir.is_absolute())
             && same_directory(exe_dir, &version_dir)
         {
@@ -149,23 +150,6 @@ mod windows_data {
             root: legacy,
             migration_source: None,
         })
-    }
-
-    fn is_launched_version(root: &Path, dir: &Path, version: &str) -> bool {
-        if dir == root.join(format!("v{version}")) {
-            return true;
-        }
-        if !cfg!(debug_assertions) || dir.parent() != Some(root) {
-            return false;
-        }
-        // 開発インストールは同じビルドを固有のディレクトリ名で配置する。
-        let base = version.split(['-', '+']).next().unwrap_or(version);
-        dir.file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| {
-                name.starts_with(&format!("v{base}-alpha.dev."))
-                    && install_layout::VersionDir::parse(name).is_some()
-            })
     }
 
     fn same_directory(exe_dir: &Path, version_dir: &Path) -> bool {

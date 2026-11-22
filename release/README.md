@@ -119,6 +119,8 @@ without disabling manual checks. The update notice installs the verified
 payload in the background. A second confirmation saves the session and
 restarts through the launcher.
 
+Developer installs also check GitHub automatically unless `EXPOS_NO_UPDATE_CHECK=1` is set.
+
 ### Exercise an update offline on Windows
 
 Use a Windows ZIP for a baseline build that contains the updater, a launcher

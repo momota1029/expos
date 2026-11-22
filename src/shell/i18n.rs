@@ -461,6 +461,8 @@ pub(crate) enum Message {
     MenuView,
     MenuUpdates,
     #[cfg(windows)]
+    UpdateUnavailable,
+    #[cfg(windows)]
     UpdateCurrent,
     #[cfg(windows)]
     UpdateCheck,
@@ -1012,6 +1014,8 @@ impl Translator {
             Message::MenuEdit => "編集",
             Message::MenuView => "表示",
             Message::MenuUpdates => "更新",
+            #[cfg(windows)]
+            Message::UpdateUnavailable => "起動役からインストールした版でのみ使えます",
             #[cfg(windows)]
             Message::UpdateCurrent => "現在の版: {version} ({channel})",
             #[cfg(windows)]
@@ -1772,6 +1776,8 @@ fn english(message: Message) -> Option<&'static str> {
         Message::MenuEdit => "Edit",
         Message::MenuView => "View",
         Message::MenuUpdates => "Updates",
+        #[cfg(windows)]
+        Message::UpdateUnavailable => "Only available for launcher-installed builds",
         #[cfg(windows)]
         Message::UpdateCurrent => "Current version: {version} ({channel})",
         #[cfg(windows)]

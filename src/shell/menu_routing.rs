@@ -1042,7 +1042,8 @@ impl FilerShell {
 
     pub(super) fn visible_menus(cx: &Context<Self>) -> &'static [menu::Menu] {
         #[cfg(windows)]
-        let updates = crate::update::ui::available(cx);
+        let updates =
+            crate::update::ui::available(cx) || crate::install_info::install_root().is_some();
         #[cfg(not(windows))]
         let updates = {
             let _ = cx;
@@ -1084,7 +1085,15 @@ impl FilerShell {
         use i18n::Message;
 
         let Some((channel, automatic, enabled)) = ui::menu_state(cx) else {
-            return Vec::new();
+            return vec![menu::Row::Leaf(menu::Entry {
+                action: ActionId::new("update.info"),
+                label: self
+                    .translator
+                    .text(Message::UpdateUnavailable)
+                    .into_owned(),
+                enabled: false,
+                checked: false,
+            })];
         };
         let leaf = |action, label, checked| {
             menu::Row::Leaf(menu::Entry {

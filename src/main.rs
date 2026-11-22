@@ -385,8 +385,7 @@ mod folder_view_preferences;
 #[cfg(target_os = "linux")]
 mod headless_shot;
 mod input;
-#[cfg(windows)]
-#[allow(dead_code)]
+#[cfg(any(windows, test))]
 mod install_info;
 mod keymap;
 mod listing_status_surface;

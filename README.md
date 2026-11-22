@@ -18,7 +18,8 @@ Interface controls use bundled Fluent UI System Icons across platforms. Their MI
 
 The [Windows installation guide](release/README.md) covers installing a
 release ZIP, switching versions, and uninstalling.
-In an installed build, use **Updates** to check the stable or beta channel.
+Use **Updates** in launcher-installed builds, including WSL developer installs,
+to check the stable or beta channel.
 See the [updater guide](release/README.md#updater) for channel behavior and
 offline testing.
 
