@@ -393,6 +393,7 @@ mod operations;
 mod overlays;
 mod pane_layout;
 mod persistence;
+mod platform;
 mod platform_open;
 mod platform_terminal;
 mod quick_preview;
@@ -17598,10 +17599,7 @@ fn main() {
     }
     #[cfg(windows)]
     archive_provider::application_image::initialize();
-    let platform = Rc::new(
-        gpui_windows::WindowsPlatform::new(false).expect("failed to initialize Windows platform"),
-    );
-    Application::with_platform(platform)
+    Application::with_platform(platform::current_platform())
         .with_assets(ResourceAssets)
         .run(|cx: &mut App| {
             // Open the optional trace before GPUI begins dispatching input.

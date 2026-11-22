@@ -32,7 +32,6 @@ notify = "8"
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp", "ico", "tiff"] }
 gpui = { git = "https://github.com/momota1029/zed", rev = "35a98c66545ed375d6f8e34b193956d4fc5f5362", version = "=0.2.2" }
 raw-window-handle = "0.6"
-gpui_windows = { git = "https://github.com/momota1029/zed", rev = "35a98c66545ed375d6f8e34b193956d4fc5f5362", version = "=0.1.0" }
 gpui-filer-input = { path = "crates/input-routing" }
 gpui-filer-resources = { path = "crates/resources" }
 gpui-filer-ui = { path = "crates/ui-components" }
@@ -52,13 +51,17 @@ path = "tests/everything_search_helper.rs"
 harness = false
 
 [target.'cfg(windows)'.dependencies]
+gpui_windows = { git = "https://github.com/momota1029/zed", rev = "35a98c66545ed375d6f8e34b193956d4fc5f5362", version = "=0.1.0" }
 everything-ipc = { version = "0.1.2", features = ["folder"] }
 # Windows-rsのimplement macroは crate-local な windows_core に依存するため、v6のCOM実装を0.62へ揃える。
 windows-core = "0.62"
-windows_062 = { package = "windows", version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
+windows_062 = { package = "windows", version = "0.62.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
 # Win32_Foundation / Win32_Security はテストで排他 open を作るために足してある
 # （CloseHandle, HANDLE, CreateFileW）。
-windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_DataExchange", "Win32_System_Diagnostics_Debug", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_Pipes", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_DataExchange", "Win32_System_Diagnostics_Debug", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_Pipes", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui_linux = { git = "https://github.com/momota1029/zed", rev = "35a98c66545ed375d6f8e34b193956d4fc5f5362", version = "=0.1.0", features = ["x11", "wayland"] }
 
 [workspace]
 resolver = "2"
@@ -77,9 +80,3 @@ exclude = [
   "crates/gpui_drag_ghost",
   "vendor/zed",
 ]
-
-[patch.crates-io]
-gpui = { git = "https://github.com/momota1029/zed", rev = "d548bf9f99", version = "=0.2.2" }
-
-[patch."https://github.com/zed-industries/zed"]
-gpui = { git = "https://github.com/momota1029/zed", rev = "d548bf9f99", version = "=0.2.2" }
