@@ -1493,11 +1493,14 @@ impl FilerShell {
         active_tab_id: usize,
         minimum_height: f32,
         window: &Window,
+        _cx: &Context<Self>,
     ) -> Pixels {
         let window_height = window.bounds().size.height.as_f32();
         let notice_row_count = usize::from(self.session_notice.is_some())
             + usize::from(self.journal_startup_notice.is_some())
             + usize::from(self.operation_notice.is_some());
+        #[cfg(windows)]
+        let notice_row_count = notice_row_count + crate::update::ui::notice_rows(_cx);
         let notice_height = notice_row_count as f32 * NOTICE_ROW_HEIGHT
             + if self.recovery_records.is_empty() {
                 0.0
@@ -1822,6 +1825,8 @@ struct QuickPreviewDecodeTestRequest {
 }
 
 struct CloseIntent {
+    #[cfg(windows)]
+    restart: Option<crate::update::ui::Restart>,
     session_ticket: Option<u64>,
     session_started: bool,
     session_rollback: bool,
@@ -13071,6 +13076,24 @@ impl FilerShell {
 
     /// Close callback は保存を開始してすぐ veto し、receipt 待ちは別 task に渡す。
     fn prepare_shutdown(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
+        #[cfg(windows)]
+        if crate::update::ui::restarting(cx) {
+            return false;
+        }
+        self.prepare_close(
+            window,
+            cx,
+            #[cfg(windows)]
+            None,
+        )
+    }
+
+    fn prepare_close(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+        #[cfg(windows)] restart: Option<crate::update::ui::Restart>,
+    ) -> bool {
         let is_registered =
             cx.read_global::<window_coordinator::WindowCoordinator, _>(|owner, _| {
                 owner.contains(self.window_id, self.window_incarnation)
@@ -13147,6 +13170,8 @@ impl FilerShell {
             cx.read_global::<window_coordinator::WindowCoordinator, _>(|owner, _| {
                 owner.registrations().len() == 1
             });
+        #[cfg(windows)]
+        let final_window = final_window || restart.is_some();
         let snapshot = match if final_window {
             self.capture(window, true, cx)
         } else {
@@ -13208,6 +13233,8 @@ impl FilerShell {
                 .global::<persistence::SessionAutosaveOwner>()
                 .has_writer();
         self.close_intent = Some(CloseIntent {
+            #[cfg(windows)]
+            restart,
             session_ticket: None,
             session_started,
             session_rollback: false,
@@ -13225,7 +13252,22 @@ impl FilerShell {
                     .await;
                 let keep_waiting = handle
                     .update(cx, |shell, window, cx| {
-                        shell.poll_close_intent(window_id, incarnation, window, cx)
+                        #[cfg(windows)]
+                        let restarting = shell
+                            .close_intent
+                            .as_ref()
+                            .is_some_and(|intent| intent.restart.is_some());
+                        let waiting = shell.poll_close_intent(window_id, incarnation, window, cx);
+                        #[cfg(windows)]
+                        if restarting
+                            && !waiting
+                            && cx
+                                .global::<window_coordinator::WindowCoordinator>()
+                                .contains(window_id, incarnation)
+                        {
+                            crate::update::ui::mark_restarting(false, cx);
+                        }
+                        waiting
                     })
                     .unwrap_or(false);
                 if !keep_waiting {
@@ -13253,6 +13295,8 @@ impl FilerShell {
         let mut folder_failure = intent.folder_failure.clone();
         let folder_revision = intent.folder_revision;
         let final_window = intent.final_window;
+        #[cfg(windows)]
+        let restarting = intent.restart.is_some();
         if self.window_id != window_id || self.window_incarnation != incarnation {
             return false;
         }
@@ -13501,6 +13545,8 @@ impl FilerShell {
                 cx.read_global::<window_coordinator::WindowCoordinator, _>(|owner, _| {
                     owner.registrations().len() == 1
                 });
+            #[cfg(windows)]
+            let is_final_now = is_final_now || restarting;
             let flush_result = if is_final_now {
                 crate::namespace_clipboard::poll_final_close()
             } else {
@@ -13523,6 +13569,27 @@ impl FilerShell {
                 }
             }
         }
+        #[cfg(windows)]
+        if let Some(restart) = self
+            .close_intent
+            .as_ref()
+            .and_then(|intent| intent.restart.as_ref())
+            && let Err(error) = restart.spawn()
+        {
+            let reason = self
+                .translator
+                .text(Message::UpdateFailed)
+                .replace("{error}", &error.to_string());
+            if let Some(id) = session_ticket {
+                self.abort_durable_close(id, reason, window, cx);
+                return true;
+            }
+            crate::namespace_clipboard::resume_accepting();
+            self.close_intent = None;
+            self.session_notice = Some(SessionNotice::Raw(reason));
+            cx.notify();
+            return false;
+        }
         if let Some(id) = session_ticket {
             cx.global_mut::<persistence::SessionAutosaveOwner>()
                 .finish_close(id, None);
@@ -13533,6 +13600,13 @@ impl FilerShell {
         cx.global_mut::<window_coordinator::WindowCoordinator>()
             .unregister(window_id, incarnation);
         self.close_intent = None;
+        #[cfg(windows)]
+        if restarting {
+            cx.global_mut::<persistence::SessionAutosaveOwner>()
+                .set_writes_paused(true);
+            cx.quit();
+            return false;
+        }
         self.service_deferred_workspace_close(cx);
         window.remove_window();
         false
@@ -13834,7 +13908,7 @@ impl FilerShell {
             label.disambiguation = hint.map(Into::into);
         }
         let group_height =
-            self.pane_tab_group_height(&labels, active, PANE_TAB_GROUP_HEIGHT, window);
+            self.pane_tab_group_height(&labels, active, PANE_TAB_GROUP_HEIGHT, window, cx);
         self.schedule_active_tab_reveal(pane_id, active, group_height, window, cx);
         let text = VerticalTabsText {
             heading: self
@@ -14131,6 +14205,9 @@ impl FilerShell {
     /// 次の変更でも試す）。keymap は次の起動まで反映されないのでボタンを出さない。
     fn render_notices(&mut self, cx: &mut Context<Self>) -> Vec<gpui::Div> {
         let mut rows = Vec::new();
+        #[cfg(windows)]
+        self.append_update_notices(&mut rows, cx);
+
         if let Some(notice) = &self.session_notice {
             let text = notice.render(&self.translator);
             let action = Some(
@@ -15247,6 +15324,61 @@ impl FilerShell {
     }
 
     /// 通知の一行。
+    #[cfg(windows)]
+    fn append_update_notices(&self, rows: &mut Vec<gpui::Div>, cx: &mut Context<Self>) {
+        use crate::update::ui::{self, NoticeAction};
+
+        let Some(notice) = ui::notice(&self.translator, cx) else {
+            return;
+        };
+        if notice.separate_data {
+            rows.push(self.notice_row(
+                self.translator.text(Message::UpdateSeparateData).into_owned(),
+                None,
+                cx,
+            ));
+        }
+        let generation = notice.generation;
+        let mut row = self.notice_row(notice.text, None, cx);
+        let mut buttons = Vec::new();
+        if let Some((action, message)) = notice.action {
+            buttons.push(("update-notice-action", action, message));
+        }
+        if notice.dismissible {
+            buttons.push((
+                "update-notice-dismiss",
+                NoticeAction::Dismiss,
+                Message::Dismiss,
+            ));
+        }
+        let palette = gpui_filer_ui::theme_palette(cx);
+        for (id, action, message) in buttons {
+            row = row.child(
+                div()
+                    .id(id)
+                    .px(px(8.0))
+                    .rounded(px(RADIUS_SM))
+                    .hover(move |style| style.bg(palette.chrome_hover))
+                    .child(self.translator.text(message).into_owned())
+                    .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                        if event.standard_click()
+                            && let Some(restart) = ui::act(action, generation, cx)
+                        {
+                            this.prepare_close(window, cx, Some(restart));
+                            if this
+                                .close_intent
+                                .as_ref()
+                                .is_some_and(|intent| intent.restart.is_some())
+                            {
+                                ui::mark_restarting(true, cx);
+                            }
+                        }
+                    })),
+            );
+        }
+        rows.push(row);
+    }
+
     fn notice_row(
         &self,
         text: String,

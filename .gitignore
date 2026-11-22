@@ -2,6 +2,7 @@
 /.local/
 /scripts/*
 !/scripts/shot.sh
+!/scripts/dev-install.sh
 /tools/
 /crates/input-routing/README.md
 /crates/resources/README.md

@@ -242,13 +242,17 @@ impl Render for FilerShell {
             label.disambiguation = hint.map(Into::into);
         }
         let active_tab_id = self.workspace.active().focused_pane().active_tab_id;
-        let active_tab_group_height =
-            self.pane_tab_group_height(&labels, active_tab_id, PANE_TAB_GROUP_HEIGHT, window)
-                + if self.workspace.active().job_progress.is_some() {
-                    px(44.0)
-                } else {
-                    px(0.0)
-                };
+        let active_tab_group_height = self.pane_tab_group_height(
+            &labels,
+            active_tab_id,
+            PANE_TAB_GROUP_HEIGHT,
+            window,
+            cx,
+        ) + if self.workspace.active().job_progress.is_some() {
+            px(44.0)
+        } else {
+            px(0.0)
+        };
         self.schedule_active_tab_reveal(
             pane_id,
             active_tab_id,
@@ -266,7 +270,7 @@ impl Render for FilerShell {
         };
         let notices = self.render_notices(cx);
         // タイトルの幅は一度だけ測り、バーと dropdown の位置で同じ値を使う。
-        let menu_titles = self.menu_titles(window);
+        let menu_titles = self.menu_titles(window, cx);
         let menu_bar = self.render_menu_bar(&menu_titles, cx);
         let active_workspace_id = self.workspace.active;
         if !self.menu.bar_visible() && self.last_revealed_workspace_id != Some(active_workspace_id)

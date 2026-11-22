@@ -459,6 +459,41 @@ pub(crate) enum Message {
     MenuFile,
     MenuEdit,
     MenuView,
+    MenuUpdates,
+    #[cfg(windows)]
+    UpdateCurrent,
+    #[cfg(windows)]
+    UpdateCheck,
+    #[cfg(windows)]
+    UpdateChannel,
+    #[cfg(windows)]
+    UpdateStable,
+    #[cfg(windows)]
+    UpdateBeta,
+    #[cfg(windows)]
+    UpdateAutomatic,
+    #[cfg(windows)]
+    UpdateChecking,
+    #[cfg(windows)]
+    UpdateSaving,
+    #[cfg(windows)]
+    UpdateAvailable,
+    #[cfg(windows)]
+    UpdateRestart,
+    #[cfg(windows)]
+    UpdateDowngrade,
+    #[cfg(windows)]
+    UpdateContinue,
+    #[cfg(windows)]
+    UpdateInstalling,
+    #[cfg(windows)]
+    UpdateInstalled,
+    #[cfg(windows)]
+    UpdateUpToDate,
+    #[cfg(windows)]
+    UpdateFailed,
+    #[cfg(windows)]
+    UpdateSeparateData,
     MenuTheme,
     MenuLanguage,
     MenuLayout,
@@ -976,6 +1011,41 @@ impl Translator {
             Message::MenuFile => "ファイル",
             Message::MenuEdit => "編集",
             Message::MenuView => "表示",
+            Message::MenuUpdates => "更新",
+            #[cfg(windows)]
+            Message::UpdateCurrent => "現在の版: {version} ({channel})",
+            #[cfg(windows)]
+            Message::UpdateCheck => "更新を確認",
+            #[cfg(windows)]
+            Message::UpdateChannel => "更新チャンネル",
+            #[cfg(windows)]
+            Message::UpdateStable => "安定版",
+            #[cfg(windows)]
+            Message::UpdateBeta => "ベータ版",
+            #[cfg(windows)]
+            Message::UpdateAutomatic => "自動で確認する",
+            #[cfg(windows)]
+            Message::UpdateChecking => "更新を確認中…",
+            #[cfg(windows)]
+            Message::UpdateSaving => "更新設定を保存中…",
+            #[cfg(windows)]
+            Message::UpdateAvailable => "更新があります: {version}",
+            #[cfg(windows)]
+            Message::UpdateRestart => "再起動して更新",
+            #[cfg(windows)]
+            Message::UpdateDowngrade => "{version} は現在より古い版です。ダウングレードしますか？",
+            #[cfg(windows)]
+            Message::UpdateContinue => "ダウングレードする",
+            #[cfg(windows)]
+            Message::UpdateInstalling => "更新をダウンロードしてインストール中…",
+            #[cfg(windows)]
+            Message::UpdateInstalled => "{version} をインストールしました。再起動して切り替えますか？",
+            #[cfg(windows)]
+            Message::UpdateUpToDate => "利用できる更新はありません",
+            #[cfg(windows)]
+            Message::UpdateFailed => "更新に失敗しました: {error}",
+            #[cfg(windows)]
+            Message::UpdateSeparateData => "安定版とベータ版のデータは別々に保存されます。",
             Message::MenuTheme => "テーマ",
             Message::MenuLanguage => "言語",
             Message::MenuLayout => "レイアウト",
@@ -1701,6 +1771,41 @@ fn english(message: Message) -> Option<&'static str> {
         Message::MenuFile => "File",
         Message::MenuEdit => "Edit",
         Message::MenuView => "View",
+        Message::MenuUpdates => "Updates",
+        #[cfg(windows)]
+        Message::UpdateCurrent => "Current version: {version} ({channel})",
+        #[cfg(windows)]
+        Message::UpdateCheck => "Check for updates",
+        #[cfg(windows)]
+        Message::UpdateChannel => "Channel",
+        #[cfg(windows)]
+        Message::UpdateStable => "Stable",
+        #[cfg(windows)]
+        Message::UpdateBeta => "Beta",
+        #[cfg(windows)]
+        Message::UpdateAutomatic => "Check automatically",
+        #[cfg(windows)]
+        Message::UpdateChecking => "Checking for updates…",
+        #[cfg(windows)]
+        Message::UpdateSaving => "Saving update settings…",
+        #[cfg(windows)]
+        Message::UpdateAvailable => "Update available: {version}",
+        #[cfg(windows)]
+        Message::UpdateRestart => "Restart to update",
+        #[cfg(windows)]
+        Message::UpdateDowngrade => "Version {version} is older than the running version. Downgrade?",
+        #[cfg(windows)]
+        Message::UpdateContinue => "Confirm downgrade",
+        #[cfg(windows)]
+        Message::UpdateInstalling => "Downloading and installing update…",
+        #[cfg(windows)]
+        Message::UpdateInstalled => "Version {version} is installed. Restart to switch?",
+        #[cfg(windows)]
+        Message::UpdateUpToDate => "No update available",
+        #[cfg(windows)]
+        Message::UpdateFailed => "Update failed: {error}",
+        #[cfg(windows)]
+        Message::UpdateSeparateData => "Stable and Beta keep separate app data.",
         Message::MenuTheme => "Theme",
         Message::MenuLanguage => "Language",
         Message::MenuLayout => "Layout",

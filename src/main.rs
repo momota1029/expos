@@ -368,6 +368,8 @@ impl ViewLayout {
 }
 
 mod app_paths;
+#[cfg(any(windows, test))]
+mod channel;
 mod commands;
 mod diagnostics;
 mod directory;
@@ -383,6 +385,9 @@ mod folder_view_preferences;
 #[cfg(target_os = "linux")]
 mod headless_shot;
 mod input;
+#[cfg(windows)]
+#[allow(dead_code)]
+mod install_info;
 mod keymap;
 mod listing_status_surface;
 mod location;
@@ -413,6 +418,8 @@ mod special;
 mod theme;
 mod thumbnails;
 mod titlebar;
+#[cfg(any(windows, test))]
+mod update;
 mod view_controls;
 mod window_coordinator;
 use commands::{AppIntent, FocusDelta};
@@ -18293,7 +18300,10 @@ fn main() {
     #[cfg(target_os = "linux")]
     let shot_result = shot_exit.clone();
     #[cfg(windows)]
-    archive_provider::application_image::initialize();
+    {
+        app_paths::prepare_startup_data();
+        archive_provider::application_image::initialize();
+    }
     Application::with_platform(platform::current_platform())
         .with_assets(ResourceAssets)
         .run(move |cx: &mut App| {
@@ -18508,6 +18518,8 @@ fn main() {
                 cx.global_mut::<window_coordinator::WindowCoordinator>()
                     .set_active_window(active_window);
             }
+            #[cfg(windows)]
+            update::ui::start(cx);
         });
     #[cfg(target_os = "linux")]
     if let Some(result) = shot_exit {

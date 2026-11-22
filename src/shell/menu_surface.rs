@@ -286,8 +286,8 @@ impl FilerShell {
     }
 
     /// メニューバーに並べるタイトル。幅を測るのはここ 1 回だけ。
-    pub(super) fn menu_titles(&self, window: &Window) -> Vec<MenuTitle> {
-        menu::Menu::ALL
+    pub(super) fn menu_titles(&self, window: &Window, cx: &Context<Self>) -> Vec<MenuTitle> {
+        Self::visible_menus(cx)
             .iter()
             .map(|menu| {
                 let label = menu.label(&self.translator);
@@ -487,16 +487,19 @@ impl FilerShell {
         cx: &mut Context<Self>,
     ) -> Option<gpui::Div> {
         let open = self.menu.open()?;
-        let view_menu = open == menu::Open::Menu(menu::Menu::View);
+        let bar_submenu = matches!(
+            open,
+            menu::Open::Menu(menu::Menu::View | menu::Menu::Updates)
+        );
         let context_popup = matches!(
             open,
             menu::Open::Popup(menu::Popup::Item | menu::Popup::Background)
         );
-        let submenu_root = view_menu || context_popup;
+        let submenu_root = bar_submenu || context_popup;
         let reopen_popup = open == menu::Open::Popup(menu::Popup::ReopenTabs);
         let workspace_popup = open == menu::Open::Popup(menu::Popup::Workspace);
-        let (rows, separators) = if view_menu {
-            (self.view_menu_root_rows(cx), Vec::new())
+        let (rows, separators) = if bar_submenu {
+            (self.bar_submenu_root_rows(open, cx), Vec::new())
         } else if context_popup {
             let root = self.context_menu_root_rows(self.menu_entries(cx));
             (root.rows, root.separators)
@@ -595,10 +598,10 @@ impl FilerShell {
             (left, top, width, geometry)
         } else {
             let menu = self.menu.open_menu()?;
-            let index = menu::Menu::ALL.iter().position(|item| *item == menu)?;
+            let index = titles.iter().position(|item| item.menu == menu)?;
             // メニューバーの横スクロール後も、見えているタイトルを基準にする。
             let anchor = title_x(titles, index) + self.menu_scroll.offset().x.as_f32();
-            if view_menu {
+            if bar_submenu {
                 let geometry = view_menu_geometry(
                     anchor,
                     viewport_width,

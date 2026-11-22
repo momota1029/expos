@@ -14,6 +14,14 @@ Archive browsing covers ZIP files and, when an optional 7-Zip provider is availa
 
 Interface controls use bundled Fluent UI System Icons across platforms. Their MIT license is in `crates/resources/assets/licenses/fluent-system/LICENSE` and `THIRD_PARTY_NOTICES.txt`.
 
+## Install on Windows
+
+The [Windows installation guide](release/README.md) covers installing a
+release ZIP, switching versions, and uninstalling.
+In an installed build, use **Updates** to check the stable or beta channel.
+See the [updater guide](release/README.md#updater) for channel behavior and
+offline testing.
+
 ## Build and run from source
 
 Install a Rust toolchain with Cargo and build from the repository root in PowerShell:
@@ -23,7 +31,7 @@ cargo run -p expos
 cargo build -p expos
 ```
 
-On Windows, the application stores settings, session state, operation history, themes, and caches under `%LOCALAPPDATA%/gpui-filer/v6/`.
+On Windows, expos started by the installed launcher stores settings, session state, operation history, themes, and caches in `%LOCALAPPDATA%\expos\data\stable\` for stable releases and `%LOCALAPPDATA%\expos\data\beta\` for prereleases. On its first run, each channel copies existing data from `%LOCALAPPDATA%\gpui-filer\v6\` and rebuilds its cache. The legacy files stay in place. Running the executable directly uses `%LOCALAPPDATA%\gpui-filer\v6\`. Set `EXPOS_DATA_DIR` to an absolute path to override the Windows data directory.
 
 On Linux and other non-Windows platforms, expos uses these XDG directories. Unset, empty, or relative XDG values use the listed defaults.
 

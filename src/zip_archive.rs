@@ -87,13 +87,11 @@ impl From<std::io::Error> for ZipReadError {
 }
 
 fn scan_central_directory_impl(
-    file: &mut File,
+    file: &mut (impl Read + Seek),
     cancelled: &AtomicBool,
+    max_entries: usize,
 ) -> Result<ScannedArchive, ZipReadError> {
-    let len = file
-        .metadata()
-        .map_err(|e| ZipReadError(e.to_string()))?
-        .len();
+    let len = file.seek(SeekFrom::End(0))?;
     let tail_len = len.min(65_557) as usize;
     let mut tail = vec![0; tail_len];
     file.seek(SeekFrom::End(-(tail_len as i64)))
@@ -246,7 +244,7 @@ fn scan_central_directory_impl(
     }
     let total =
         usize::try_from(total).map_err(|_| ZipReadError("ZIP entry count overflow".into()))?;
-    if total > MAX_ENTRIES || cd_size > MAX_CENTRAL_BYTES {
+    if total > max_entries.min(MAX_ENTRIES) || cd_size > MAX_CENTRAL_BYTES {
         return Err(ZipReadError(
             "ZIP central directory exceeds the configured bounds".into(),
         ));
@@ -464,7 +462,7 @@ pub(crate) fn scan_central_directory(
     file: &mut File,
     cancelled: &AtomicBool,
 ) -> Result<ScannedArchive, ZipReadError> {
-    scan_central_directory_impl(file, cancelled)
+    scan_central_directory_impl(file, cancelled, MAX_ENTRIES)
 }
 
 fn resolve_zip64_extra_impl(
@@ -809,14 +807,28 @@ pub(crate) fn with_validated_archive<T, E>(
 where
     E: From<ZipReadError>,
 {
-    let scanned = scan_central_directory_impl(file, cancelled).map_err(E::from)?;
+    let reader = file
+        .try_clone()
+        .map_err(|e| E::from(ZipReadError(e.to_string())))?;
+    with_validated_archive_limit(reader, cancelled, MAX_ENTRIES, callback)
+}
+
+pub(crate) fn with_validated_archive_limit<R: Read + Seek, T, E>(
+    mut reader: R,
+    cancelled: &AtomicBool,
+    max_entries: usize,
+    callback: impl for<'a> FnOnce(
+        &'a mut ZipArchive<validated_reader::Reader<'a, R>>,
+        &'a [ManifestNode],
+    ) -> Result<T, E>,
+) -> Result<T, E>
+where
+    E: From<ZipReadError>,
+{
+    let scanned =
+        scan_central_directory_impl(&mut reader, cancelled, max_entries).map_err(E::from)?;
     let mode = std::cell::Cell::new(false);
-    let reader = validated_reader::Reader::new(
-        file.try_clone()
-            .map_err(|e| E::from(ZipReadError(e.to_string())))?,
-        scanned.layout.clone(),
-        &mode,
-    );
+    let reader = validated_reader::Reader::new(reader, scanned.layout, &mode);
     let mut archive = ZipArchive::with_config(
         zip::read::Config {
             archive_offset: zip::read::ArchiveOffset::Known(0),

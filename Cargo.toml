@@ -41,8 +41,10 @@ gpui_drag_ghost = { package = "gpui_drag_ghost_v6", path = "crates/drag-ghost" }
 thumb-engine = { path = "crates/thumb-engine" }
 win_shell_dnd = { path = "crates/win_shell_dnd" }
 
-[dev-dependencies]
+install-layout = { path = "crates/install-layout" }
 tempfile = "3"
+
+[dev-dependencies]
 gpui = { git = "https://github.com/momota1029/zed", rev = "35a98c66545ed375d6f8e34b193956d4fc5f5362", version = "=0.2.2", features = ["test-support"] }
 
 [[test]]
@@ -76,6 +78,8 @@ members = [
   "crates/ui-components",
   "crates/virtual-list",
   "crates/drag-ghost",
+  "crates/install-layout",
+  "crates/launcher",
 ]
 default-members = ["."]
 exclude = [

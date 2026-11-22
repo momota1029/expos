@@ -26,6 +26,7 @@ pub(super) enum Menu {
     Edit,
     View,
     Go,
+    Updates,
 }
 
 /// 開いている面。メニューバーから出る dropdown か、ポインタの位置に出る popup。
@@ -58,6 +59,8 @@ pub(super) enum ViewSubmenu {
     Language,
     Compression,
     Creation,
+    #[cfg(windows)]
+    UpdateChannel,
 }
 
 /// 分岐を実行コマンドと区別し、テーマ名は表示した項目に保持する。
@@ -264,6 +267,14 @@ impl Menu {
     /// 左から並べる順。
     pub(super) const ALL: &'static [Self] = &[Self::File, Self::Edit, Self::View, Self::Go];
 
+    pub(super) fn visible(updates: bool) -> &'static [Self] {
+        if updates {
+            &[Self::File, Self::Edit, Self::View, Self::Go, Self::Updates]
+        } else {
+            Self::ALL
+        }
+    }
+
     pub(super) fn label(self, translator: &Translator) -> String {
         translator
             .text(match self {
@@ -271,6 +282,7 @@ impl Menu {
                 Self::Edit => Message::MenuEdit,
                 Self::View => Message::MenuView,
                 Self::Go => Message::MenuGo,
+                Self::Updates => Message::MenuUpdates,
             })
             .into_owned()
     }
@@ -282,6 +294,7 @@ impl Menu {
             Self::Edit => EDIT,
             Self::View => VIEW,
             Self::Go => GO,
+            Self::Updates => &[],
         }
     }
 }

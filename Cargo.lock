@@ -1619,6 +1619,7 @@ dependencies = [
  "gpui_linux",
  "gpui_windows",
  "image",
+ "install-layout",
  "kamadak-exif",
  "notify",
  "raw-window-handle",
@@ -1635,6 +1636,14 @@ dependencies = [
  "windows 0.62.2",
  "windows-core 0.62.2",
  "zip",
+]
+
+[[package]]
+name = "expos-launcher"
+version = "0.1.0"
+dependencies = [
+ "install-layout",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -2764,6 +2773,15 @@ checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
 dependencies = [
  "block-padding",
  "generic-array",
+]
+
+[[package]]
+name = "install-layout"
+version = "0.1.0"
+dependencies = [
+ "semver",
+ "tempfile",
+ "windows 0.62.2",
 ]
 
 [[package]]

@@ -283,30 +283,16 @@ impl FilerShell {
                 true
             }
             "right" => {
-                if (self.menu.open() == Some(menu::Open::Menu(menu::Menu::View))
-                    || matches!(
-                        self.menu.open(),
-                        Some(menu::Open::Popup(
-                            menu::Popup::Item | menu::Popup::Background
-                        ))
-                    ))
-                    && self.menu.view_submenu().is_none()
-                {
-                    let rows = if self.menu.open() == Some(menu::Open::Menu(menu::Menu::View)) {
-                        self.view_menu_root_rows(cx)
-                    } else {
-                        self.context_menu_root_rows(self.menu_entries(cx)).rows
-                    };
-                    if matches!(
-                        rows.get(self.menu.highlight_index()),
-                        Some(menu::Row::Branch { .. })
-                    ) {
-                        self.open_view_submenu_from_keyboard(self.menu.highlight_index(), cx);
+                if self.menu.view_submenu().is_none() {
+                    let index = self.menu.highlight_index();
+                    if let Some(menu::Row::Branch { submenu, .. }) = self
+                        .submenu_roots(cx)
+                        .and_then(|rows| rows.get(index).cloned())
+                    {
+                        self.enter_view_submenu_from_keyboard(submenu, index, cx);
                     } else {
                         self.step_menu(1, cx);
                     }
-                } else if self.menu.view_submenu().is_none() {
-                    self.step_menu(1, cx);
                 }
                 true
             }
@@ -1054,10 +1040,107 @@ impl FilerShell {
         rows
     }
 
+    pub(super) fn visible_menus(cx: &Context<Self>) -> &'static [menu::Menu] {
+        #[cfg(windows)]
+        let updates = crate::update::ui::available(cx);
+        #[cfg(not(windows))]
+        let updates = {
+            let _ = cx;
+            false
+        };
+        menu::Menu::visible(updates)
+    }
+
+    pub(super) fn bar_submenu_root_rows(
+        &self,
+        open: menu::Open,
+        cx: &Context<Self>,
+    ) -> Vec<menu::Row> {
+        match open {
+            menu::Open::Menu(menu::Menu::View) => self.view_menu_root_rows(cx),
+            #[cfg(windows)]
+            menu::Open::Menu(menu::Menu::Updates) => self.update_menu_rows(false, cx),
+            _ => Vec::new(),
+        }
+    }
+
+    fn submenu_roots(&self, cx: &Context<Self>) -> Option<Vec<menu::Row>> {
+        let open = self.menu.open()?;
+        match open {
+            menu::Open::Menu(menu::Menu::View | menu::Menu::Updates) => {
+                Some(self.bar_submenu_root_rows(open, cx))
+            }
+            menu::Open::Popup(menu::Popup::Item | menu::Popup::Background) => {
+                Some(self.context_menu_root_rows(self.menu_entries(cx)).rows)
+            }
+            _ => None,
+        }
+    }
+
+    #[cfg(windows)]
+    fn update_menu_rows(&self, channels: bool, cx: &Context<Self>) -> Vec<menu::Row> {
+        use crate::channel::Channel;
+        use crate::update::ui;
+        use i18n::Message;
+
+        let Some((channel, automatic, enabled)) = ui::menu_state(cx) else {
+            return Vec::new();
+        };
+        let leaf = |action, label, checked| {
+            menu::Row::Leaf(menu::Entry {
+                action: ActionId::new(action),
+                label,
+                enabled,
+                checked,
+            })
+        };
+        if channels {
+            return [
+                ("update.stable", Channel::Stable),
+                ("update.beta", Channel::Beta),
+            ]
+            .into_iter()
+            .map(|(action, choice)| {
+                leaf(
+                    action,
+                    ui::channel_label(choice, &self.translator),
+                    choice == channel,
+                )
+            })
+            .collect();
+        }
+        vec![
+            menu::Row::Leaf(menu::Entry {
+                action: ActionId::new("update.info"),
+                label: ui::running_label(&self.translator),
+                enabled: false,
+                checked: false,
+            }),
+            leaf(
+                "update.check",
+                self.translator.text(Message::UpdateCheck).into_owned(),
+                false,
+            ),
+            menu::Row::Branch {
+                submenu: menu::ViewSubmenu::UpdateChannel,
+                label: self.translator.text(Message::UpdateChannel).into_owned(),
+            },
+            leaf(
+                "update.automatic",
+                self.translator.text(Message::UpdateAutomatic).into_owned(),
+                automatic,
+            ),
+        ]
+    }
+
     pub(super) fn menu_rows(&mut self, cx: &Context<Self>) -> Vec<menu::Row> {
         let Some(open) = self.menu.open() else {
             return Vec::new();
         };
+        #[cfg(windows)]
+        if open == menu::Open::Menu(menu::Menu::Updates) {
+            return self.update_menu_rows(self.menu.view_submenu().is_some(), cx);
+        }
         let entries = self.menu_entries(cx);
         if open != menu::Open::Menu(menu::Menu::View) {
             if matches!(
@@ -1113,6 +1196,8 @@ impl FilerShell {
                 .cloned()
         };
         match self.menu.view_submenu() {
+            #[cfg(windows)]
+            Some(menu::ViewSubmenu::UpdateChannel) => Vec::new(),
             None => self.view_menu_root_rows(cx),
             Some(menu::ViewSubmenu::Layout) => {
                 [input::LAYOUT_ROWS, input::LAYOUT_TILES, input::LAYOUT_ICONS]
@@ -1316,38 +1401,11 @@ impl FilerShell {
     }
 
     pub(super) fn open_view_submenu_at(&mut self, index: usize, cx: &mut Context<Self>) {
-        let root_rows = if self.menu.open() == Some(menu::Open::Menu(menu::Menu::View)) {
-            self.view_menu_root_rows(cx)
-        } else if matches!(
-            self.menu.open(),
-            Some(menu::Open::Popup(
-                menu::Popup::Item | menu::Popup::Background
-            ))
-        ) {
-            self.context_menu_root_rows(self.menu_entries(cx)).rows
-        } else {
-            return;
-        };
-        if let Some(menu::Row::Branch { submenu, .. }) = root_rows.get(index) {
-            self.enter_view_submenu(*submenu, index, cx);
-        }
-    }
-
-    fn open_view_submenu_from_keyboard(&mut self, index: usize, cx: &mut Context<Self>) {
-        let root_rows = if self.menu.open() == Some(menu::Open::Menu(menu::Menu::View)) {
-            self.view_menu_root_rows(cx)
-        } else if matches!(
-            self.menu.open(),
-            Some(menu::Open::Popup(
-                menu::Popup::Item | menu::Popup::Background
-            ))
-        ) {
-            self.context_menu_root_rows(self.menu_entries(cx)).rows
-        } else {
-            return;
-        };
-        if let Some(menu::Row::Branch { submenu, .. }) = root_rows.get(index) {
-            self.enter_view_submenu_from_keyboard(*submenu, index, cx);
+        if let Some(menu::Row::Branch { submenu, .. }) = self
+            .submenu_roots(cx)
+            .and_then(|rows| rows.get(index).cloned())
+        {
+            self.enter_view_submenu(submenu, index, cx);
         }
     }
 
@@ -1378,25 +1436,7 @@ impl FilerShell {
     }
 
     pub(super) fn hover_menu_row(&mut self, index: usize, cx: &mut Context<Self>) {
-        let rows = self.menu_rows(cx);
         self.menu.hover(index);
-        if (self.menu.open() == Some(menu::Open::Menu(menu::Menu::View))
-            || matches!(
-                self.menu.open(),
-                Some(menu::Open::Popup(
-                    menu::Popup::Item | menu::Popup::Background
-                ))
-            ))
-            && self.menu.view_submenu().is_none()
-            && matches!(rows.get(index), Some(menu::Row::Branch { .. }))
-        {
-            self.open_view_submenu_at(index, cx);
-        } else if self.menu.open() == Some(menu::Open::Menu(menu::Menu::View))
-            && self.menu.view_submenu().is_some()
-            && matches!(rows.get(index), Some(menu::Row::Leaf(_)))
-        {
-            // Child rows are handled by their own panel; root leaf hover closes the child.
-        }
         cx.notify();
     }
 
@@ -1407,16 +1447,7 @@ impl FilerShell {
     }
 
     pub(super) fn hover_view_root_row(&mut self, index: usize, cx: &mut Context<Self>) {
-        let roots = if self.menu.open() == Some(menu::Open::Menu(menu::Menu::View)) {
-            self.view_menu_root_rows(cx)
-        } else if matches!(
-            self.menu.open(),
-            Some(menu::Open::Popup(
-                menu::Popup::Item | menu::Popup::Background
-            ))
-        ) {
-            self.context_menu_root_rows(self.menu_entries(cx)).rows
-        } else {
+        let Some(roots) = self.submenu_roots(cx) else {
             return;
         };
         match roots.get(index) {
@@ -1439,7 +1470,7 @@ impl FilerShell {
             }
             return;
         };
-        let menus = menu::Menu::ALL;
+        let menus = Self::visible_menus(cx);
         let index = menus.iter().position(|menu| *menu == current).unwrap_or(0);
         let next = (index as isize + offset).rem_euclid(menus.len() as isize) as usize;
         self.show_menu(menus[next], cx);
@@ -1827,6 +1858,21 @@ impl FilerShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(windows)]
+        if self.menu.open() == Some(menu::Open::Menu(menu::Menu::Updates)) {
+            use crate::channel::Channel;
+            use crate::update::ui::{self, Check};
+
+            self.leave_menu(cx);
+            match action.as_str() {
+                "update.check" => ui::check(Check::Manual, cx),
+                "update.stable" => ui::check(Check::Choose(Channel::Stable), cx),
+                "update.beta" => ui::check(Check::Choose(Channel::Beta), cx),
+                "update.automatic" => ui::toggle_automatic(cx),
+                _ => {}
+            }
+            return;
+        }
         let popup = self.menu.open();
         if action.as_str() == menu::NEW_WINDOW
             && self.menu.open() == Some(menu::Open::Menu(menu::Menu::File))
