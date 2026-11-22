@@ -313,8 +313,7 @@ impl DirectoryListDemo {
             )
             .child(self.render_scrollbar(cx))
             .when_some(self.sticky_heading_row(), |frame, row| {
-                // heading は通常の virtual row と同じ selection UI を使う。overlay は
-                // position だけを変え、selection authority を複製しない。
+                // 通常行と同じ見出しを、下の項目が透けないよう一覧と同じ地色に重ねる。
                 let bounds = Rc::new(RefCell::new(None));
                 if let Some(geometry) = self.item_menu_geometry.borrow_mut().as_mut() {
                     geometry.occluding_surfaces.push(bounds.clone());
@@ -328,6 +327,7 @@ impl DirectoryListDemo {
                             .top_0()
                             .left_0()
                             .right(px(20.0))
+                            .bg(gpui_filer_ui::theme_palette(cx).surface_base)
                             .child(self.render_group(row, false, "sticky", cx))
                             .into_any_element(),
                     }

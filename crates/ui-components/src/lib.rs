@@ -168,6 +168,7 @@ pub struct Icon {
     id: IconId,
     size: Pixels,
     color: Hsla,
+    group_hover_color: Option<(SharedString, Hsla)>,
 }
 
 impl Icon {
@@ -176,6 +177,7 @@ impl Icon {
             id,
             size: px(16.0),
             color: gpui::black(),
+            group_hover_color: None,
         }
     }
 
@@ -189,10 +191,18 @@ impl Icon {
         self.color = color;
         self
     }
+
+    /// 単色SVGの色を、親コントロール全体の hover に合わせる。
+    pub fn group_hover_color(mut self, group: impl Into<SharedString>, color: Hsla) -> Self {
+        self.group_hover_color = Some((group.into(), color));
+        self
+    }
 }
 
 impl RenderOnce for Icon {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        use gpui::InteractiveElement as _;
+
         let source = self.id.definition().source;
         let container = div()
             .size(self.size)
@@ -224,7 +234,15 @@ impl RenderOnce for Icon {
                 .child(glyph.to_string())
                 .into_any_element(),
             IconSource::Svg(path) => container
-                .child(svg().path(path).size(self.size).text_color(self.color))
+                .child(
+                    svg()
+                        .path(path)
+                        .size(self.size)
+                        .text_color(self.color)
+                        .when_some(self.group_hover_color, |icon, (group, color)| {
+                            icon.group_hover(group, |style| style.text_color(color))
+                        }),
+                )
                 .into_any_element(),
         }
     }

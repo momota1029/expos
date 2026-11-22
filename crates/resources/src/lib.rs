@@ -270,7 +270,7 @@ impl IconId {
             ),
             FolderTree => (
                 "folder-tree",
-                IconSource::Svg("icons/fluent-system/list_bar_tree_offset_16_regular.svg"),
+                IconSource::Svg("icons/fluent-system/caret_right_16_filled.svg"),
             ),
             Expand => (
                 "expand",
@@ -584,8 +584,8 @@ impl AssetSource for ResourceAssets {
             "icons/fluent-system/list_16_regular.svg" => Some(include_bytes!(
                 "../assets/icons/fluent-system/list_16_regular.svg"
             )),
-            "icons/fluent-system/list_bar_tree_offset_16_regular.svg" => Some(include_bytes!(
-                "../assets/icons/fluent-system/list_bar_tree_offset_16_regular.svg"
+            "icons/fluent-system/caret_right_16_filled.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/caret_right_16_filled.svg"
             )),
             "icons/fluent-system/navigation_16_regular.svg" => Some(include_bytes!(
                 "../assets/icons/fluent-system/navigation_16_regular.svg"

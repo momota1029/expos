@@ -12531,10 +12531,12 @@ impl DirectoryListDemo {
             geometry.occluding_surfaces.push(bounds.clone());
         }
         let bounds_for_click = bounds.clone();
+        let palette = gpui_filer_ui::theme_palette(cx);
         BoundsCapture {
             bounds,
             child: div()
                 .id(("folder-tree-button", index))
+                .group("folder-tree-button")
                 .absolute()
                 .right(px(4.0))
                 .bottom(px(4.0))
@@ -12544,20 +12546,21 @@ impl DirectoryListDemo {
                 .justify_center()
                 .rounded(px(3.0))
                 .border_1()
-                .border_color(gpui_filer_ui::theme_palette(cx).border)
-                .bg(gpui_filer_ui::theme_palette(cx).chrome_hover)
+                .border_color(palette.border)
+                .bg(palette.chrome_hover)
                 .opacity(if self.folder_tree_button_active.as_ref() == Some(&path) {
                     1.0
                 } else {
                     0.0
                 })
                 .group_hover(group, |button| button.opacity(1.0))
-                .hover(|button| button.bg(gpui_filer_ui::theme_palette(cx).chrome_hover_strong))
-                .active(|button| button.bg(gpui_filer_ui::theme_palette(cx).accent_hover))
+                .hover(|button| button.bg(palette.chrome_hover_strong))
+                .active(|button| button.bg(palette.accent_hover))
                 .child(
                     Icon::new(IconId::FolderTree)
                         .size(px(14.0))
-                        .color(gpui_filer_ui::theme_palette(cx).text.into()),
+                        .color(palette.text_muted.into())
+                        .group_hover_color("folder-tree-button", palette.text.into()),
                 )
                 .on_mouse_down(
                     gpui::MouseButton::Left,

@@ -1221,6 +1221,42 @@ impl DirectoryListDemo {
         self.render_group_with_preview_size(row, measuring, id_scope, None, 1.0, cx)
     }
 
+    fn group_heading(
+        id: impl Into<gpui::ElementId>,
+        palette: gpui_filer_ui::ThemePalette,
+        focused: bool,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(id)
+            .relative()
+            .w_full()
+            .h(px(gpui_filer_ui::CHECKBOX_COMPACT_HEIGHT))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .hover(|heading| heading.bg(palette.text.opacity(0.04)))
+            // 罫線とフォーカス枠は checkbox の高さと行測定を変えない。
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .border_t_1()
+                    .border_color(palette.text.opacity(0.08)),
+            )
+            .when(focused, |heading| {
+                heading.child(
+                    div()
+                        .absolute()
+                        .inset(px(2.0))
+                        .border_1()
+                        .border_color(palette.text.opacity(0.28)),
+                )
+            })
+            .text_size(px(12.0))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_color(palette.text_muted)
+    }
+
     pub(super) fn render_group_with_preview_size(
         &self,
         row: usize,
@@ -1230,6 +1266,7 @@ impl DirectoryListDemo {
         scale_factor: f32,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
+        let palette = gpui_filer_ui::theme_palette(cx);
         if let Some(ProjectedRow::CategoryStrip { groups, .. }) = self.projected_rows.get(row) {
             let mut strip = div()
                 .id(format!("{id_scope}-category-strip-{row}"))
@@ -1254,24 +1291,26 @@ impl DirectoryListDemo {
                         })
                     },
                 )
+                .compact()
                 .indeterminate(state == RangeSelectionState::Some);
                 let focused = matches!(self.selection.focus_target(), Some(FocusTarget::Section(focused)) if focused == &category.key);
+                // 見出しを短くしても、項目の開始位置とキー移動の境界は保つ。
                 let heading = div()
                     .id(format!("{id_scope}-category-heading-{row}-{column}"))
                     .w_full()
                     .h(px(gpui_filer_ui::CHECKBOX_HIT_SIZE))
-                    .px(px(4.0))
-                    .flex()
-                    .items_center()
-                    .when(focused, |heading| {
-                        heading
-                            .border_1()
-                            .border_color(gpui::hsla(0.58, 0.25, 0.62, 0.8))
-                    })
-                    .text_size(px(14.0))
-                    .gap(px(6.0))
-                    .child(checkbox)
-                    .child(category.label.clone());
+                    .child(
+                        Self::group_heading("heading-label", palette, focused)
+                            .px(px(4.0))
+                            .gap(px(6.0))
+                            .child(checkbox)
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .child(format!("{} (1)", category.label)),
+                            ),
+                    );
                 let heading = if measuring {
                     heading
                 } else {
@@ -1306,7 +1345,7 @@ impl DirectoryListDemo {
                         .child(heading)
                         .child(self.render_entry(
                             index,
-                            gpui_filer_ui::theme_palette(cx).text.into(),
+                            palette.text.into(),
                             measuring,
                             preview_size,
                             scale_factor,
@@ -1344,41 +1383,20 @@ impl DirectoryListDemo {
             .compact()
             .indeterminate(state == RangeSelectionState::Some);
             let focused = matches!(self.selection.focus_target(), Some(FocusTarget::Section(focused)) if focused == &key);
-            let palette = gpui_filer_ui::theme_palette(cx);
-            let heading = div()
-                .id(format!("{id_scope}-section-heading-{row}"))
-                .relative()
-                .w_full()
-                .h(px(gpui_filer_ui::CHECKBOX_COMPACT_HEIGHT))
-                .flex_shrink_0()
-                .px(px(12.0))
-                .flex()
-                .items_center()
-                .gap(px(8.0))
-                .bg(palette.surface_base.blend(palette.text.opacity(0.045)))
-                // 罫線とフォーカス枠は checkbox の高さと行測定を変えない。
-                .child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .border_t_1()
-                        .border_color(palette.text.opacity(0.14))
-                        .when(focused, |outline| {
-                            outline
-                                .border_1()
-                                .border_color(gpui::hsla(0.58, 0.25, 0.62, 0.8))
-                        }),
-                )
-                .text_size(px(12.0))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(palette.text_muted)
-                .child(checkbox)
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .child(format!("{label} ({})", end - start)),
-                );
+            let heading = Self::group_heading(
+                format!("{id_scope}-section-heading-{row}"),
+                palette,
+                focused,
+            )
+            .px(px(12.0))
+            .gap(px(8.0))
+            .child(checkbox)
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .child(format!("{label} ({})", end - start)),
+            );
             return if measuring {
                 heading
             } else {
