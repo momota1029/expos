@@ -70,8 +70,11 @@ The viewport is 1280 × 800 except for `narrow` at 640 × 700 and
 | `editors-and-empty.json` | `editors-and-empty` | `rename-editor-active`, `rename-invalid-name`, `empty-folder`, `folder-rename-editor` |
 
 The rich fixture includes 41 root entries with separate long-name and empty
-folders. Text files range from 2 bytes to about 65 KB. The ZIP entries are
-plain-text filename samples, and the PNGs reuse the basic fixture's swatch.
+folders. The runner generates `long-names/` and its five files in the staged
+copy before setting timestamps. Generating them at run time keeps the checked-in
+fixture paths within Windows' `MAX_PATH` limit. Text files range from 2 bytes to
+about 65 KB. The ZIP entries are plain-text filename samples, and the PNGs reuse
+the basic fixture's swatch.
 
 The Edit menu exposes keymap reload. View exposes the theme and language
 submenus and File Info. The hamburger has no standalone Settings, Keymaps, or

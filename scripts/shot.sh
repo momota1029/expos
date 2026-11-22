@@ -151,6 +151,20 @@ cp -a -- "$fixture/." "$run/fixture/"
 chmod -R u+rwX -- "$run/fixture"
 # Git needs a tracked file to carry an otherwise-empty directory.
 find "$run/fixture" -type f -name .shot-empty -empty -delete
+# 長い名前は Windows の MAX_PATH 制限を避けるため、Linux の作業用コピーにだけ作る。
+if [[ ${fixture##*/} == rich ]]; then
+    long_names=$run/fixture/long-names
+    mkdir -p -- "$long_names"
+    printf '%s\n' 'A name designed to wrap and exceed the visible area.' \
+        >"$long_names/00-abcdefghijklmnopqrstuvwxyz_0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz_0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz_0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz_0123456789.txt"
+    printf '%s\n' 'A name whose extension also exceeds the available width.' \
+        >"$long_names/01-weekly-review-notes-from-the-layout-and-typography-team-for-the-next-release.anextensionthatkeepsgoingwellpasttheavailablenamecolumnwidthandcontinuesuntilthefilemanagerhasnowherelefttodisplayit"
+    printf '%s\n' '日本語と空白を含む長いファイル名。' \
+        >"$long_names/02-資料 ファイル一覧の幅が狭いときの表示を確認するための長い名前ファイル一覧の幅が狭いときの表示を確認するための長い名前.txt"
+    printf '%s\n' 'A shorter name for comparison.' \
+        >"$long_names/03-layout review 日本語のファイル名.txt"
+    printf '%s\n' 'Short baseline.' >"$long_names/04-Reference.txt"
+fi
 # Git checkouts and generated fixtures can have different timestamps on disk.
 TZ=UTC find "$run/fixture" -exec touch -h -m -d '2020-01-02 03:04:05' -- {} +
 if [[ -f ${fixture}.mtimes ]]; then
