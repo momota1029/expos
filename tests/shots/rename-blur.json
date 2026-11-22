@@ -1,0 +1,13 @@
+{
+  "comment": "一覧の余白をクリックして変更を確定し、新しいファイル名を撮影する。",
+  "steps": [
+    {"action": "size", "width": 1280, "height": 800},
+    {"action": "view", "mode": "rows"},
+    {"action": "select", "name": "notes.txt"},
+    {"action": "key", "keys": "f2 b l u r n o t e s"},
+    {"action": "click", "x": 760, "y": 690},
+    {"action": "wait_idle"},
+    {"action": "screenshot", "name": "rename-blur-committed"},
+    {"action": "select", "name": "blurnotes.txt"}
+  ]
+}

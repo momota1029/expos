@@ -1,0 +1,19 @@
+{
+  "comment": "名前を変更すると並び順が変わる場合も、Tab で変更前の隣の項目を編集する。",
+  "steps": [
+    {"action": "size", "width": 1280, "height": 800},
+    {"action": "view", "mode": "rows"},
+    {"action": "select", "name": "documents"},
+    {"action": "key", "keys": "f2 p r o j e c t s tab"},
+    {"action": "wait_idle"},
+    {"action": "key", "keys": "ctrl-a z d o c s tab"},
+    {"action": "wait_idle"},
+    {"action": "screenshot", "name": "rename-tab-second-editor"},
+    {"action": "key", "keys": "b p r o j e c t s tab"},
+    {"action": "wait_idle"},
+    {"action": "key", "keys": "shift-tab escape"},
+    {"action": "screenshot", "name": "rename-tab-final"},
+    {"action": "select", "name": "zdocs"},
+    {"action": "select", "name": "bprojects"}
+  ]
+}

@@ -437,7 +437,10 @@ impl Runner {
                     return Err(format!("directory enumeration failed: {error}").into());
                 }
                 // PC の session は、XDG の行が届く前に Ready になりうる。
-                Ok(!status.is_loading() && (!view.is_this_pc() || view.pc_base_sources_complete))
+                Ok(!status.is_loading()
+                    && (!view.is_this_pc() || view.pc_base_sources_complete)
+                    && view.pending_rename_geometry.is_none()
+                    && view.pending_rename_tab.is_none())
             })?
         })
         .await?;

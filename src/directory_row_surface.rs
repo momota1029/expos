@@ -1,6 +1,70 @@
 use super::*;
 
 impl DirectoryListDemo {
+    fn render_inline_rename_input(
+        &self,
+        index: usize,
+        input: gpui::Entity<rename_editor::RenameInput>,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let editor_id = input.entity_id();
+        let pointer_input = input.clone();
+        div()
+            .id(("rename-input", index))
+            .w_full()
+            // Toolbar など、クリックそのものでは focus を取らない面も対象にする。
+            // 対象のクリックはそのまま配送し、後から取った focus を奪わない。
+            .on_mouse_down_out(cx.listener(move |this, _, window, cx| {
+                if this.rename_session.as_ref().is_some_and(|session| {
+                    session.input.entity_id() == editor_id
+                        && session.input.read(cx).is_focused(window)
+                }) {
+                    this.finish_rename_on_blur(window, cx);
+                    this.focus_handle.focus(window, cx);
+                }
+            }))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                move |event: &gpui::MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    pointer_input.update(cx, |input, cx| {
+                        input.begin_pointer_selection(event.position, window, cx)
+                    });
+                },
+            )
+            .on_mouse_down(gpui::MouseButton::Right, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down(gpui::MouseButton::Middle, |_, _, cx| cx.stop_propagation())
+            .on_mouse_move({
+                let pointer_input = input.clone();
+                move |event: &gpui::MouseMoveEvent, _, cx| {
+                    if event.pressed_button == Some(gpui::MouseButton::Left)
+                        && pointer_input.update(cx, |input, cx| {
+                            input.extend_pointer_selection(event.position, cx)
+                        })
+                    {
+                        cx.stop_propagation();
+                    }
+                }
+            })
+            .on_mouse_up(gpui::MouseButton::Left, {
+                let pointer_input = input.clone();
+                move |_, _, cx| {
+                    pointer_input.update(cx, |input, _| input.end_pointer_selection());
+                    cx.stop_propagation();
+                }
+            })
+            .on_mouse_up_out(gpui::MouseButton::Left, {
+                let pointer_input = input.clone();
+                move |_, _, cx| {
+                    if pointer_input.update(cx, |input, _| input.end_pointer_selection()) {
+                        cx.stop_propagation();
+                    }
+                }
+            })
+            .child(input)
+            .into_any_element()
+    }
+
     fn render_entry(
         &self,
         index: usize,
@@ -443,51 +507,7 @@ impl DirectoryListDemo {
                 .expect("detail cache is rebuilt with the entry projection");
             let mut name_text = div().min_w_0().flex_1().w_full().overflow_hidden().child(
                 if let Some(input) = rename_input.clone() {
-                    let pointer_input = input.clone();
-                    div()
-                        .id(("rename-input", index))
-                        .w_full()
-                        .on_mouse_down(
-                            gpui::MouseButton::Left,
-                            cx.listener(move |_this, event: &gpui::MouseDownEvent, window, cx| {
-                                cx.stop_propagation();
-                                pointer_input.update(cx, |input, cx| {
-                                    input.begin_pointer_selection(event.position, window, cx)
-                                });
-                            }),
-                        )
-                        .on_mouse_move({
-                            let pointer_input = input.clone();
-                            cx.listener(move |_, event: &gpui::MouseMoveEvent, _, cx| {
-                                if event.pressed_button == Some(gpui::MouseButton::Left)
-                                    && pointer_input.update(cx, |input, cx| {
-                                        input.extend_pointer_selection(event.position, cx)
-                                    })
-                                {
-                                    cx.stop_propagation();
-                                }
-                            })
-                        })
-                        .on_mouse_up(
-                            gpui::MouseButton::Left,
-                            cx.listener({
-                                let pointer_input = input.clone();
-                                move |_, _, _, cx| {
-                                    pointer_input
-                                        .update(cx, |input, _| input.end_pointer_selection());
-                                    cx.stop_propagation();
-                                }
-                            }),
-                        )
-                        .on_mouse_up_out(gpui::MouseButton::Left, {
-                            let pointer_input = input.clone();
-                            cx.listener(move |_, _, _, cx| {
-                                pointer_input.update(cx, |input, _| input.end_pointer_selection());
-                                cx.stop_propagation();
-                            })
-                        })
-                        .child(input)
-                        .into_any_element()
+                    self.render_inline_rename_input(index, input, cx)
                 } else {
                     div().child(display_name.clone()).into_any_element()
                 },
@@ -778,51 +798,7 @@ impl DirectoryListDemo {
             .when(icons, |label| label.text_center())
             .child(div().min_w_0().w_full().overflow_hidden().child(
                 if let Some(input) = rename_input {
-                    let pointer_input = input.clone();
-                    div()
-                        .id(("rename-input", index))
-                        .w_full()
-                        .on_mouse_down(
-                            gpui::MouseButton::Left,
-                            cx.listener(move |_this, event: &gpui::MouseDownEvent, window, cx| {
-                                cx.stop_propagation();
-                                pointer_input.update(cx, |input, cx| {
-                                    input.begin_pointer_selection(event.position, window, cx)
-                                });
-                            }),
-                        )
-                        .on_mouse_move({
-                            let pointer_input = input.clone();
-                            cx.listener(move |_, event: &gpui::MouseMoveEvent, _, cx| {
-                                if event.pressed_button == Some(gpui::MouseButton::Left)
-                                    && pointer_input.update(cx, |input, cx| {
-                                        input.extend_pointer_selection(event.position, cx)
-                                    })
-                                {
-                                    cx.stop_propagation();
-                                }
-                            })
-                        })
-                        .on_mouse_up(
-                            gpui::MouseButton::Left,
-                            cx.listener({
-                                let pointer_input = input.clone();
-                                move |_, _, _, cx| {
-                                    pointer_input
-                                        .update(cx, |input, _| input.end_pointer_selection());
-                                    cx.stop_propagation();
-                                }
-                            }),
-                        )
-                        .on_mouse_up_out(gpui::MouseButton::Left, {
-                            let pointer_input = input.clone();
-                            cx.listener(move |_, _, _, cx| {
-                                pointer_input.update(cx, |input, _| input.end_pointer_selection());
-                                cx.stop_propagation();
-                            })
-                        })
-                        .child(input)
-                        .into_any_element()
+                    self.render_inline_rename_input(index, input, cx)
                 } else {
                     div().child(display_name).into_any_element()
                 },

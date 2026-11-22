@@ -6073,27 +6073,16 @@ impl FilerShell {
     ) {
         let current_attempt = self
             .workspace
-            .active()
-            .focused_pane()
-            .tabs
-            .iter()
-            .find(|tab| tab.id == view_id)
+            .find_tab_by_id(view_id)
             .is_some_and(|tab| tab.view.read(cx).is_current_rename_attempt(attempt_ticket));
         if !current_attempt {
             return;
         }
-        let current = self
-            .workspace
-            .active()
-            .focused_pane()
-            .tabs
-            .iter()
-            .find(|tab| tab.id == view_id)
-            .is_some_and(|tab| {
-                tab.view
-                    .read(cx)
-                    .accepts_operation_origin(location_epoch, presentation_revision)
-            });
+        let current = self.workspace.find_tab_by_id(view_id).is_some_and(|tab| {
+            tab.view
+                .read(cx)
+                .accepts_operation_origin(location_epoch, presentation_revision)
+        });
         let Some(parent) = source.parent().map(std::path::Path::to_path_buf) else {
             self.reject_rename_geometry(view_id, attempt_ticket, cx);
             return;
@@ -6121,26 +6110,19 @@ impl FilerShell {
                 self.reject_rename_geometry(view_id, attempt_ticket, cx);
                 return;
             };
-            let current_probe_target = self
-                .workspace
-                .active()
-                .focused_pane()
-                .tabs
-                .iter()
-                .find(|tab| tab.id == view_id)
-                .is_some_and(|tab| {
-                    tab.view.read(cx).accepts_rename_probe(
-                        &key,
-                        &source,
-                        link_kind,
-                        &source_identity,
-                        &accepted_scan,
-                        &parent_identity,
-                        location_epoch,
-                        presentation_revision,
-                        attempt_ticket,
-                    )
-                });
+            let current_probe_target = self.workspace.find_tab_by_id(view_id).is_some_and(|tab| {
+                tab.view.read(cx).accepts_rename_probe(
+                    &key,
+                    &source,
+                    link_kind,
+                    &source_identity,
+                    &accepted_scan,
+                    &parent_identity,
+                    location_epoch,
+                    presentation_revision,
+                    attempt_ticket,
+                )
+            });
             if !current_probe_target {
                 self.reject_rename_geometry(view_id, attempt_ticket, cx);
                 return;
@@ -6210,14 +6192,7 @@ impl FilerShell {
             .submit(request)
         {
             Ok(token) => {
-                if let Some(tab) = self
-                    .workspace
-                    .active()
-                    .focused_pane()
-                    .tabs
-                    .iter()
-                    .find(|tab| tab.id == view_id)
-                {
+                if let Some(tab) = self.workspace.find_tab_by_id(view_id) {
                     tab.view.update(cx, |view, _| {
                         view.rename_operation_accepted(token, location_epoch, presentation_revision)
                     });
@@ -6247,36 +6222,25 @@ impl FilerShell {
     ) {
         let attempt_is_current = self
             .workspace
-            .active()
-            .focused_pane()
-            .tabs
-            .iter()
-            .find(|tab| tab.id == view_id)
+            .find_tab_by_id(view_id)
             .is_some_and(|tab| tab.view.read(cx).is_current_rename_attempt(attempt_ticket));
         // 古い probe は後続の Rename geometry pin を解除してはいけない。
         if !attempt_is_current {
             return;
         }
-        let current = self
-            .workspace
-            .active()
-            .focused_pane()
-            .tabs
-            .iter()
-            .find(|tab| tab.id == view_id)
-            .is_some_and(|tab| {
-                tab.view.read(cx).accepts_rename_probe(
-                    &key,
-                    &source,
-                    link_kind,
-                    &source_identity,
-                    &accepted_scan,
-                    &parent_identity,
-                    location_epoch,
-                    presentation_revision,
-                    attempt_ticket,
-                )
-            });
+        let current = self.workspace.find_tab_by_id(view_id).is_some_and(|tab| {
+            tab.view.read(cx).accepts_rename_probe(
+                &key,
+                &source,
+                link_kind,
+                &source_identity,
+                &accepted_scan,
+                &parent_identity,
+                location_epoch,
+                presentation_revision,
+                attempt_ticket,
+            )
+        });
         let Ok(guard) = result else {
             self.reject_rename_geometry(view_id, attempt_ticket, cx);
             return;
@@ -6332,14 +6296,7 @@ impl FilerShell {
             .submit(request)
         {
             Ok(token) => {
-                if let Some(tab) = self
-                    .workspace
-                    .active()
-                    .focused_pane()
-                    .tabs
-                    .iter()
-                    .find(|tab| tab.id == view_id)
-                {
+                if let Some(tab) = self.workspace.find_tab_by_id(view_id) {
                     tab.view.update(cx, |view, _| {
                         view.rename_operation_accepted(token, location_epoch, presentation_revision)
                     });
@@ -6402,14 +6359,7 @@ impl FilerShell {
         attempt_ticket: u64,
         cx: &mut Context<Self>,
     ) {
-        if let Some(tab) = self
-            .workspace
-            .active()
-            .focused_pane()
-            .tabs
-            .iter()
-            .find(|tab| tab.id == view_id)
-        {
+        if let Some(tab) = self.workspace.find_tab_by_id(view_id) {
             tab.view.update(cx, |view, cx| {
                 if view.is_current_rename_attempt(attempt_ticket) {
                     view.rename_operation_rejected(cx);
@@ -8393,11 +8343,9 @@ impl FilerShell {
         if let Some(origin) = rename_origin
             && let Ok(tab_id) = usize::try_from(origin.view_id)
             && let Some(tab) = self.workspace.find_tab_by_id(tab_id)
-            && tab.view.read(cx).current_location_generation() == origin.location_epoch
-            && tab.view.read(cx).presentation_revision == origin.presentation_revision
         {
             tab.view.update(cx, |view, cx| {
-                view.rename_operation_terminal(token, wait_for_listing, cx)
+                view.rename_operation_terminal(token, &report, wait_for_listing, cx)
             });
         }
         let mut changed_directories: Vec<_> = report

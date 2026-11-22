@@ -45,6 +45,8 @@ pub struct RenameInput {
     centered: bool,
     /// address bar は折り返さない。Rename だけが item row に合わせて複数行になる。
     single_line: bool,
+    inline_filename: bool,
+    read_only: bool,
 }
 
 struct TextUndo {
@@ -161,6 +163,20 @@ impl RenameInput {
             expected_height: None,
             centered,
             single_line: false,
+            inline_filename: false,
+            read_only: false,
+        }
+    }
+
+    pub(super) fn inline_filename(
+        cx: &mut Context<Self>,
+        text: String,
+        centered: bool,
+        initial_selection: Range<usize>,
+    ) -> Self {
+        Self {
+            inline_filename: true,
+            ..Self::new(cx, text, centered, initial_selection)
         }
     }
 
@@ -182,6 +198,8 @@ impl RenameInput {
             expected_height: None,
             centered: false,
             single_line: true,
+            inline_filename: false,
+            read_only: false,
         }
     }
 
@@ -190,6 +208,15 @@ impl RenameInput {
     }
     pub fn text(&self) -> &str {
         &self.text
+    }
+    pub(super) fn committed_text(&self) -> &str {
+        self.marked_restore
+            .as_ref()
+            .map_or(&self.text, |(text, _, _)| text)
+    }
+    pub(super) fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
+        self.read_only = read_only;
+        cx.notify();
     }
     pub fn is_composing(&self) -> bool {
         self.marked.is_some()
@@ -261,8 +288,8 @@ impl RenameInput {
         true
     }
 
-    pub fn end_pointer_selection(&mut self) {
-        self.pointer_selection_anchor = None;
+    pub fn end_pointer_selection(&mut self) -> bool {
+        self.pointer_selection_anchor.take().is_some()
     }
     fn shape(&self, width: Pixels, window: &Window) -> Option<WrappedLine> {
         let style = window.text_style();
@@ -388,6 +415,9 @@ impl RenameInput {
         Some(position)
     }
     pub fn backspace(&mut self, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
         let prior_selection = self.selection.clone();
         let prior_selection_reversed = self.selection_reversed;
         let history_len = self.undo_history.len();
@@ -407,6 +437,9 @@ impl RenameInput {
         }
     }
     pub fn delete_forward(&mut self, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
         let prior_selection = self.selection.clone();
         let prior_selection_reversed = self.selection_reversed;
         let history_len = self.undo_history.len();
@@ -427,7 +460,7 @@ impl RenameInput {
     }
     pub fn undo_text(&mut self, cx: &mut Context<Self>) {
         // IME preedit は確定済み編集ではなく、ここでは履歴を進めない。
-        if self.marked.is_some() {
+        if self.read_only || self.marked.is_some() {
             return;
         }
         let Some(undo) = self.undo_history.pop() else {
@@ -565,6 +598,9 @@ impl RenameInput {
         utf8
     }
     fn replace(&mut self, r: Option<Range<usize>>, v: &str, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
         // Windows TSF の確定は `unmark` の後に range=None で届くことがある。
         // 変換中 range を先に take してから replacement の fallback に使わないと、
         // preedit の後ろへ確定文字列を追加してしまう。
@@ -655,6 +691,9 @@ impl EntityInputHandler for RenameInput {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         if v.is_empty() && self.restore_marked_composition(cx) {
             return;
         }
@@ -754,8 +793,9 @@ impl Render for RenameInput {
             .on_mouse_up_out(
                 gpui::MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
-                    this.end_pointer_selection();
-                    cx.stop_propagation();
+                    if this.end_pointer_selection() || !this.inline_filename {
+                        cx.stop_propagation();
+                    }
                 }),
             )
             .key_context("RenameInput")
@@ -920,15 +960,17 @@ impl Element for RenameInputElement {
         w: &mut Window,
         cx: &mut App,
     ) {
-        let (f, align) = {
+        let (f, align, read_only) = {
             let input = self.input.read(cx);
-            (input.focus.clone(), input.text_align())
+            (input.focus.clone(), input.text_align(), input.read_only)
         };
-        w.handle_input(
-            &f,
-            ElementInputHandler::new(s.bounds, self.input.clone()),
-            cx,
-        );
+        if !read_only {
+            w.handle_input(
+                &f,
+                ElementInputHandler::new(s.bounds, self.input.clone()),
+                cx,
+            );
+        }
         s.line
             .paint_background(
                 s.bounds.origin,

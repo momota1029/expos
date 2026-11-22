@@ -1299,6 +1299,8 @@ struct DirectoryListDemo {
     pending_rename_anchor: Option<PendingProjectionAnchor>,
     /// accepted rename の terminal/listing commit まで保つ editor 行の表示 geometry。
     pending_rename_geometry: Option<PendingRenameGeometry>,
+    /// 編集欄を閉じても進行中の Tab rename は終端通知まで追跡する。
+    pending_rename_tab: Option<PendingRenameTab>,
     /// rename reconciliation は推定行高で先に scroll を動かさず、可視行を測った
     /// 後の最終 anchor 一回だけを適用する。
     defer_projection_anchor_until_measured: bool,
@@ -1381,8 +1383,62 @@ struct RenameSession {
     accepted_scan: Option<directory_session::ScanTicket>,
     location_generation: u64,
     presentation_revision: u64,
+    original_name: String,
     input: gpui::Entity<rename_editor::RenameInput>,
+    error: Option<SharedString>,
     _input_events: Subscription,
+    _focus_out: Subscription,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RenameBlurBehavior {
+    CommitIfChanged,
+    #[allow(dead_code)]
+    Cancel,
+}
+
+const INLINE_RENAME_BLUR_BEHAVIOR: RenameBlurBehavior = RenameBlurBehavior::CommitIfChanged;
+
+fn should_commit_rename_on_blur(behavior: RenameBlurBehavior, original: &str, text: &str) -> bool {
+    behavior == RenameBlurBehavior::CommitIfChanged && !text.is_empty() && text != original
+}
+
+#[derive(Clone, Copy)]
+enum RenameTabDirection {
+    Next,
+    Previous,
+}
+
+fn rename_neighbor_index(
+    index: usize,
+    count: usize,
+    direction: RenameTabDirection,
+) -> Option<usize> {
+    if index >= count {
+        return None;
+    }
+    match direction {
+        RenameTabDirection::Next => index.checked_add(1).filter(|next| *next < count),
+        RenameTabDirection::Previous => index.checked_sub(1),
+    }
+}
+
+struct RenameTabTarget {
+    key: entry_identity::EntryKey,
+    identity: filesystem_identity::FilesystemIdentity,
+}
+
+struct PendingRenameTab {
+    editor: gpui::EntityId,
+    window: gpui::AnyWindowHandle,
+    target: Option<RenameTabTarget>,
+    token: Option<operations::model::AttemptToken>,
+}
+
+enum RenameCommit {
+    Enter,
+    Blur,
+    Tab(Option<RenameTabTarget>),
 }
 
 struct BatchRenameSession {
@@ -2049,6 +2105,54 @@ mod rename_probe_attempt_tests {
         assert!(super::is_current_rename_attempt(second, second));
         assert!(!super::is_current_rename_attempt(second, first));
         assert!(!super::should_reject_rename_geometry(second, first));
+    }
+}
+
+#[cfg(test)]
+mod rename_interaction_tests {
+    use super::{
+        RenameBlurBehavior, RenameTabDirection, rename_neighbor_index, should_commit_rename_on_blur,
+    };
+
+    #[test]
+    fn rename_tab_uses_adjacent_entries_without_wrapping() {
+        use RenameTabDirection::{Next, Previous};
+
+        assert_eq!(rename_neighbor_index(0, 3, Next), Some(1));
+        assert_eq!(rename_neighbor_index(1, 3, Previous), Some(0));
+        assert_eq!(rename_neighbor_index(2, 3, Next), None);
+        assert_eq!(rename_neighbor_index(0, 3, Previous), None);
+        assert_eq!(rename_neighbor_index(0, 1, Next), None);
+        assert_eq!(rename_neighbor_index(0, 1, Previous), None);
+        assert_eq!(rename_neighbor_index(0, 0, Next), None);
+        assert_eq!(rename_neighbor_index(3, 3, Previous), None);
+    }
+
+    #[test]
+    fn rename_blur_only_commits_a_changed_nonempty_name_when_enabled() {
+        use RenameBlurBehavior::{Cancel, CommitIfChanged};
+
+        assert!(should_commit_rename_on_blur(
+            CommitIfChanged,
+            "old.txt",
+            "new.txt"
+        ));
+        assert!(should_commit_rename_on_blur(
+            CommitIfChanged,
+            "old.txt",
+            "Old.txt"
+        ));
+        assert!(!should_commit_rename_on_blur(
+            CommitIfChanged,
+            "old.txt",
+            "old.txt"
+        ));
+        assert!(!should_commit_rename_on_blur(
+            CommitIfChanged,
+            "old.txt",
+            ""
+        ));
+        assert!(!should_commit_rename_on_blur(Cancel, "old.txt", "new.txt"));
     }
 }
 
@@ -3699,6 +3803,14 @@ impl DirectoryListDemo {
     /// path へ移るとき（`begin_location_change`）と PC へ移るとき（`navigate_to_pc`）が
     /// 同じものを使う。選択もスクロール位置も場所をまたいで持ち越さない。
     fn reset_view_state(&mut self, cx: &mut Context<Self>) {
+        self.rename_session = None;
+        if self
+            .pending_rename_geometry
+            .as_ref()
+            .is_some_and(|pending| pending.terminal_waiting_for_listing)
+        {
+            self.pending_rename_tab = None;
+        }
         self.entries.clear();
         self.projected_rows.clear();
         self.heading_rows.clear();
@@ -4891,6 +5003,7 @@ impl DirectoryListDemo {
         let keys: Vec<_> = self.entries.iter().map(|entry| entry.key.clone()).collect();
         self.selection.restore_remapped(snapshot, &keys);
         // 並びが変わったので、index を捕捉した古い gesture を無効にする。
+        let previous_revision = self.presentation_revision;
         self.presentation_revision = self.presentation_revision.wrapping_add(1);
         // 同じ location の reconciliation は `reset_projected_rows` だけで十分。
         // ここで幅まで無効化すると次 frame で virtual rows を再 reset し、
@@ -4898,6 +5011,28 @@ impl DirectoryListDemo {
         self.reset_projected_rows();
         self.hovered_item_part = None;
         self.emit_info_projection(cx);
+        if settled_geometry.is_some() {
+            self.finish_rename_tab_after_listing(settled_rename, cx);
+        } else if let Some(rename) = self.rename_session.as_mut()
+            && rename.location_generation == self.location_generation
+            && rename.presentation_revision == previous_revision
+            && rename.parent_identity.as_ref() == self.session.directory_identity()
+            && self.entries.iter().any(|entry| {
+                entry.key == rename.key
+                    && entry.path.as_ref() == Some(&rename.source)
+                    && entry.name == rename.original_name
+                    && entry.link == rename.link_kind
+                    && entry
+                        .source_identity
+                        .as_ref()
+                        .map(|identity| identity.filesystem_identity())
+                        == rename.source_identity
+            })
+        {
+            // 無関係な watcher 更新やサイズ取得で editor が消えないよう、同じ対象だけ引き継ぐ。
+            rename.presentation_revision = self.presentation_revision;
+            rename.accepted_scan = self.session.accepted_scan_ticket().cloned();
+        }
         cx.notify();
     }
 
@@ -6122,6 +6257,7 @@ impl DirectoryListDemo {
             pending_projection_anchor: None,
             pending_rename_anchor: None,
             pending_rename_geometry: None,
+            pending_rename_tab: None,
             defer_projection_anchor_until_measured: false,
             rename_session: None,
             quick_search: None,
@@ -6428,19 +6564,33 @@ impl DirectoryListDemo {
         // IME candidate confirmation/cancellation belongs to the input handler
         // first. Treating its Enter/Escape as a rename decision would submit or
         // discard a still-marked composition.
-        if self
-            .rename_session
-            .as_ref()
-            .is_some_and(|session| session.input.read(cx).is_composing())
-        {
+        let Some(session) = self.rename_session.as_ref() else {
+            return false;
+        };
+        let input = session.input.read(cx);
+        if !input.is_focused(window) || input.is_composing() {
             return false;
         }
+        let modifiers = keystroke.modifiers;
         match keystroke.key.as_str() {
-            "enter" => self.commit_rename(window, cx),
+            "enter" => self.commit_rename(RenameCommit::Enter, window, cx),
             "escape" => {
                 self.close_rename_editor(false);
                 self.focus_handle.focus(window, cx);
                 cx.notify();
+            }
+            "tab"
+                if !modifiers.control
+                    && !modifiers.alt
+                    && !modifiers.platform
+                    && !modifiers.function =>
+            {
+                let direction = if modifiers.shift {
+                    RenameTabDirection::Previous
+                } else {
+                    RenameTabDirection::Next
+                };
+                self.commit_rename_tab(direction, window, cx);
             }
             // Editor actions and Text/IME events must continue to the focused
             // EntityInputHandler. Handling edit keys here as well made a key
@@ -8686,7 +8836,9 @@ impl DirectoryListDemo {
         cx: &mut Context<Self>,
     ) {
         self.address_edit = None;
-        if self.selection.is_multiple() && !captured_single_target {
+        if self.pending_rename_tab.is_some()
+            || (self.selection.is_multiple() && !captured_single_target)
+        {
             return;
         }
         let Some(entry) = self
@@ -8711,17 +8863,20 @@ impl DirectoryListDemo {
             &entry.name,
             matches!(entry.kind, EntryKind::File) && !self.select_extension_on_rename,
         );
-        let input = cx
-            .new(|cx| rename_editor::RenameInput::new(cx, entry.name.clone(), centered, selection));
-        let input_events = cx.subscribe(&input, |this, _, event, cx| match event {
+        let input = cx.new(|cx| {
+            rename_editor::RenameInput::inline_filename(cx, entry.name.clone(), centered, selection)
+        });
+        let input_events = cx.subscribe(&input, |this, input, event, cx| match event {
             rename_editor::RenameInputEvent::TextChanged => {
-                this.pending_projection_anchor = this.projection_anchor();
-                if let Some(session) = this.rename_session.as_ref()
+                if let Some(session) = this.rename_session.as_mut()
+                    && session.input == input
                     && let Some(index) = this
                         .entries
                         .iter()
                         .position(|entry| entry.key == session.key)
                 {
+                    session.error = None;
+                    this.pending_projection_anchor = this.projection_anchor();
                     let Some(row) = this.entry_row(index) else {
                         return;
                     };
@@ -8733,6 +8888,20 @@ impl DirectoryListDemo {
             }
             rename_editor::RenameInputEvent::CopyPlainText(text) => {
                 cx.emit(DirectoryEvent::CopyPlainText { text: text.clone() });
+            }
+        });
+        let editor_id = input.entity_id();
+        let focus = gpui::Focusable::focus_handle(input.read(cx), cx);
+        let focus_out = cx.on_focus_out(&focus, window, move |this, _, window, cx| {
+            if window.is_window_active()
+                && let Some(session) = this.rename_session.as_ref()
+                && session.input.entity_id() == editor_id
+            {
+                let editor_was_focused = session.input.read(cx).is_focused(window);
+                this.finish_rename_on_blur(window, cx);
+                if editor_was_focused {
+                    this.focus_handle.focus(window, cx);
+                }
             }
         });
         self.rename_session = Some(RenameSession {
@@ -8747,8 +8916,11 @@ impl DirectoryListDemo {
             accepted_scan: self.session.accepted_scan_ticket().cloned(),
             location_generation: self.location_generation,
             presentation_revision: self.presentation_revision,
+            original_name: entry.name.clone(),
             input,
+            error: None,
             _input_events: input_events,
+            _focus_out: focus_out,
         });
         self.rename_session
             .as_ref()
@@ -9347,18 +9519,126 @@ impl DirectoryListDemo {
                 true
             }
             AppIntent::Rename => {
-                self.commit_rename(window, cx);
+                self.commit_rename(RenameCommit::Enter, window, cx);
                 true
             }
             _ => true,
         }
     }
 
-    fn commit_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn finish_rename_on_blur(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(session) = self.rename_session.as_ref() else {
+            return;
+        };
+        let input = session.input.read(cx);
+        // エラーを表示した入力を、同じ内容のまま blur で再送しない。
+        if self.pending_rename_tab.is_none()
+            && session.error.is_none()
+            && should_commit_rename_on_blur(
+                INLINE_RENAME_BLUR_BEHAVIOR,
+                &session.original_name,
+                input.committed_text(),
+            )
+        {
+            self.commit_rename(RenameCommit::Blur, window, cx);
+        } else {
+            self.close_rename_editor(false);
+            cx.notify();
+        }
+    }
+
+    fn commit_rename_tab(
+        &mut self,
+        direction: RenameTabDirection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.pending_rename_tab.is_some() || self.pending_rename_geometry.is_some() {
+            return;
+        }
+        let Some(session) = self.rename_session.as_ref() else {
+            return;
+        };
+        let target = self
+            .entries
+            .iter()
+            .position(|entry| entry.key == session.key)
+            .and_then(|index| rename_neighbor_index(index, self.entries.len(), direction))
+            .and_then(|index| {
+                let entry = &self.entries[index];
+                Some(RenameTabTarget {
+                    key: entry.key.clone(),
+                    identity: entry.source_identity.as_ref()?.filesystem_identity(),
+                })
+            });
+        let text = session.input.read(cx).text();
+        if text == session.original_name {
+            self.continue_rename_tab(target, window, cx);
+        } else if operations::rename::is_single_name(text) {
+            self.commit_rename(RenameCommit::Tab(target), window, cx);
+        } else {
+            self.set_rename_error(Message::InlineRenameInvalidName, None, cx);
+        }
+    }
+
+    fn continue_rename_tab(
+        &mut self,
+        target: Option<RenameTabTarget>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_rename_editor(false);
+        self.focus_handle.focus(window, cx);
+        if let Some(target) = target
+            && let Some((index, entry)) = self.entries.iter().enumerate().find(|(_, entry)| {
+                entry.key == target.key
+                    && entry.source_identity.as_ref().is_some_and(|identity| {
+                        identity.filesystem_identity() == target.identity
+                    })
+            })
+            && let Some(source) = entry.path.clone()
+        {
+            self.apply_item(
+                AppIntent::PickItem {
+                    toggle: false,
+                    range: false,
+                },
+                index,
+                window,
+                cx,
+            );
+            self.reveal_focus(index);
+            self.begin_rename(source, true, window, cx);
+        }
+        cx.notify();
+    }
+
+    fn set_rename_error(&mut self, message: Message, detail: Option<&str>, cx: &mut Context<Self>) {
+        if let Some(session) = self.rename_session.as_mut() {
+            let heading = self.translator.text(message);
+            session.error = Some(match detail {
+                Some(detail) => format!("{heading}\n{detail}").into(),
+                None => heading.into_owned().into(),
+            });
+            cx.notify();
+        }
+    }
+
+    fn commit_rename(&mut self, commit: RenameCommit, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_rename_tab.is_some() {
+            return;
+        }
         let Some(rename) = self.rename_session.as_ref() else {
             return;
         };
-        let new_name = rename.input.read(cx).text().to_owned();
+        let input = rename.input.read(cx);
+        let new_name = if matches!(commit, RenameCommit::Blur) {
+            input.committed_text()
+        } else {
+            input.text()
+        }
+        .to_owned();
+        let restore_list_focus = matches!(commit, RenameCommit::Enter);
         let Some(attempt_ticket) = next_rename_attempt_ticket(self.rename_attempt_ticket) else {
             self.close_rename_editor(false);
             return;
@@ -9444,8 +9724,26 @@ impl DirectoryListDemo {
                 })
         });
         let retain_geometry = still_current && pending_geometry.is_some();
-        let Some(session) = self.close_rename_editor(retain_geometry) else {
-            return;
+        let session = match commit {
+            RenameCommit::Tab(target) => {
+                if !retain_geometry {
+                    self.set_rename_error(Message::InlineRenameFailed, None, cx);
+                    return;
+                }
+                let session = self.rename_session.as_mut().unwrap();
+                session.error = None;
+                session
+                    .input
+                    .update(cx, |input, cx| input.set_read_only(true, cx));
+                self.pending_rename_tab = Some(PendingRenameTab {
+                    editor: session.input.entity_id(),
+                    window: window.window_handle(),
+                    target,
+                    token: None,
+                });
+                None
+            }
+            _ => self.close_rename_editor(retain_geometry),
         };
         if retain_geometry {
             // terminal と対応する listing が揃うまで editor 行高を保つ。ここで
@@ -9455,21 +9753,24 @@ impl DirectoryListDemo {
             self.pending_rename_geometry = pending_geometry;
         }
         if still_current {
+            let session = session.as_ref().or(self.rename_session.as_ref()).unwrap();
             cx.emit(DirectoryEvent::Rename {
-                source: session.source,
-                key: session.key,
+                source: session.source.clone(),
+                key: session.key.clone(),
                 new_name,
                 identity_guard,
                 attempt_ticket,
                 link_kind: session.link_kind,
-                source_identity: session.source_identity,
-                accepted_scan: session.accepted_scan,
-                parent_identity: session.parent_identity,
+                source_identity: session.source_identity.clone(),
+                accepted_scan: session.accepted_scan.clone(),
+                parent_identity: session.parent_identity.clone(),
                 location_epoch: session.location_generation,
                 presentation_revision: session.presentation_revision,
             });
         }
-        self.focus_handle.focus(window, cx);
+        if restore_list_focus {
+            self.focus_handle.focus(window, cx);
+        }
         cx.notify();
     }
 
@@ -9477,6 +9778,8 @@ impl DirectoryListDemo {
     /// まで高さを pin するので、その間だけ `retain_geometry` を使う。
     fn close_rename_editor(&mut self, retain_geometry: bool) -> Option<RenameSession> {
         let key = self.rename_session.as_ref()?.key.clone();
+        let retain_geometry = retain_geometry
+            || (self.pending_rename_tab.is_some() && self.pending_rename_geometry.is_some());
         if !retain_geometry {
             self.pending_projection_anchor = self.projection_anchor_avoiding(&key);
         }
@@ -9534,6 +9837,9 @@ impl DirectoryListDemo {
         location_epoch: u64,
         presentation_revision: u64,
     ) {
+        if let Some(pending) = self.pending_rename_tab.as_mut() {
+            pending.token = Some(token);
+        }
         if self.location_generation != location_epoch
             || self.presentation_revision != presentation_revision
         {
@@ -9549,11 +9855,13 @@ impl DirectoryListDemo {
 
     pub(crate) fn rename_operation_rejected(&mut self, cx: &mut Context<Self>) {
         self.release_pending_rename_geometry(cx);
+        self.fail_pending_rename_tab(None, cx);
     }
 
     pub(crate) fn rename_operation_terminal(
         &mut self,
         token: operations::model::AttemptToken,
+        report: &operations::model::TerminalReport,
         wait_for_listing: bool,
         cx: &mut Context<Self>,
     ) {
@@ -9565,17 +9873,79 @@ impl DirectoryListDemo {
                     && pending.location_generation == self.location_generation
                     && pending.presentation_revision == self.presentation_revision
             });
-        if !matches {
-            return;
-        }
-        if wait_for_listing {
+        if matches && wait_for_listing {
             let pending = self.pending_rename_geometry.as_mut().unwrap();
             pending.terminal_waiting_for_listing = true;
             pending.accepted_scan_before_terminal = self.session.accepted_scan_ticket().cloned();
             pending.pending_scan_before_terminal = self.session.pending().cloned();
-        } else {
+            return;
+        }
+        if matches {
             self.release_pending_rename_geometry(cx);
         }
+        if self
+            .pending_rename_tab
+            .as_ref()
+            .is_some_and(|pending| pending.token == Some(token))
+        {
+            let detail = report
+                .receipts
+                .iter()
+                .find_map(|receipt| receipt.detail.as_deref());
+            self.fail_pending_rename_tab(detail, cx);
+        }
+    }
+
+    fn fail_pending_rename_tab(&mut self, detail: Option<&str>, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending_rename_tab.take() else {
+            return;
+        };
+        if let Some(session) = self.rename_session.as_ref()
+            && session.input.entity_id() == pending.editor
+        {
+            session
+                .input
+                .update(cx, |input, cx| input.set_read_only(false, cx));
+            if session.accepted_scan.as_ref() != self.session.accepted_scan_ticket() {
+                self.apply_listing(cx);
+            }
+            self.set_rename_error(Message::InlineRenameFailed, detail, cx);
+        }
+    }
+
+    fn finish_rename_tab_after_listing(&mut self, listing_succeeded: bool, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending_rename_tab.take() else {
+            return;
+        };
+        let view = cx.weak_entity();
+        cx.defer(move |cx| {
+            let _ = pending.window.update(cx, |_, window, cx| {
+                let _ = view.update(cx, |this, cx| {
+                    let Some(session) = this.rename_session.as_ref() else {
+                        return;
+                    };
+                    if session.input.entity_id() != pending.editor
+                        || session.location_generation != this.location_generation
+                    {
+                        return;
+                    }
+                    // 列挙後の順番から取り直すと rename による並び替えで項目が飛ぶ。
+                    // Tab 時点の隣を identity で照合し、focus が残っている場合だけ開く。
+                    let may_continue =
+                        session.input.read(cx).is_focused(window) && this.session.is_visible();
+                    this.close_rename_editor(true);
+                    if !may_continue {
+                        cx.notify();
+                        return;
+                    }
+                    this.continue_rename_tab(
+                        pending.target.filter(|_| listing_succeeded),
+                        window,
+                        cx,
+                    );
+                });
+            });
+        });
     }
 
     fn rename_reconciliation_failed(&mut self, ticket: &directory_session::ScanTicket) {
@@ -9598,6 +9968,9 @@ impl DirectoryListDemo {
         let Some(pending) = self.pending_rename_geometry.take() else {
             return;
         };
+        if pending.terminal_waiting_for_listing {
+            self.finish_rename_tab_after_listing(false, cx);
+        }
         if self.location_generation != pending.location_generation
             || self.presentation_revision != pending.presentation_revision
         {
@@ -12923,6 +13296,10 @@ impl Render for DirectoryListDemo {
             .as_ref()
             .map(|session| session.input.clone());
         let palette = gpui_filer_ui::theme_palette(cx);
+        let rename_error = self
+            .rename_session
+            .as_ref()
+            .and_then(|session| session.error.clone());
         let rendered = div()
             .track_focus(&self.focus_handle)
             .capture_any_mouse_down(cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
@@ -12980,13 +13357,24 @@ impl Render for DirectoryListDemo {
                     .gap(px(8.0))
                     .text_size(px(CHROME_FONT_SIZE))
                     .bg(gpui_filer_ui::theme_palette(cx).surface_raised)
-                    .child(div().flex_1().min_w(px(120.0)).overflow_hidden().child(
-                        self.translator.list_status(
-                            self.entries.len(),
-                            self.selection.len(),
-                            self.selection.is_selection_mode(),
-                        ),
-                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(120.0))
+                            .overflow_hidden()
+                            .when(rename_error.is_some(), |status| {
+                                status.h(px(44.0)).text_color(palette.warning_text)
+                            })
+                            .child(rename_error.unwrap_or_else(|| {
+                                self.translator
+                                    .list_status(
+                                        self.entries.len(),
+                                        self.selection.len(),
+                                        self.selection.is_selection_mode(),
+                                    )
+                                    .into()
+                            })),
+                    )
                     .child(self.render_layout_switch(cx))
                     .child(self.render_group_switch(cx).flex_shrink_0())
                     .when(self.layout != ViewLayout::Rows, |bar| {

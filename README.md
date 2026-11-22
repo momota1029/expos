@@ -37,6 +37,8 @@ On Linux, **Delete** moves ordinary files and directories to the desktop Trash. 
 
 On Linux, the PC view lists Home, existing XDG user directories, and **File System** (`/`). Removable and remote mounts are deferred.
 
+In inline **Rename**, **Enter** saves and **Escape** cancels. Clicking elsewhere in the app saves a changed, nonempty name. **Tab** and **Shift+Tab** save and edit the adjacent item in the displayed order. At either end of the list, editing finishes. A failed Tab rename keeps the current editor open for correction.
+
 On Linux, inline **Rename** changes the name of an ordinary file or folder in its current directory. It refuses existing destinations and supports case-only changes on case-sensitive filesystems. Filesystem Undo for Linux rename is unavailable.
 
 ## Video preview support

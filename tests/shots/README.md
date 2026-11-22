@@ -8,6 +8,8 @@ bash scripts/shot.sh --repeat 2 tests/shots/fixtures/basic tests/shots/navigatio
 bash scripts/shot.sh --repeat 2 tests/shots/fixtures/basic tests/shots/tab-pin.json
 bash scripts/shot.sh --repeat 2 tests/shots/fixtures/basic tests/shots/views.json
 bash scripts/shot.sh --repeat 2 tests/shots/fixtures/basic tests/shots/keyboard.json
+bash scripts/shot.sh --repeat 2 tests/shots/fixtures/basic tests/shots/rename-tab.json
+bash scripts/shot.sh --repeat 2 tests/shots/fixtures/basic tests/shots/rename-blur.json
 bash scripts/shot.sh --repeat 2 tests/shots/fixtures/places tests/shots/places.json
 ```
 

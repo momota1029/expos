@@ -437,6 +437,8 @@ pub(crate) enum Message {
     BatchRenameSubmit,
     BatchRenameNoChanges,
     BatchRenameListingChanged,
+    InlineRenameInvalidName,
+    InlineRenameFailed,
     ConflictHeading,
     ConflictAlreadyExists,
     ConflictSkip,
@@ -885,6 +887,8 @@ impl Translator {
             Message::BatchRenameCancel => "キャンセル",
             Message::BatchRenameSubmit => "名前を変更",
             Message::BatchRenameNoChanges => "変更なし",
+            Message::InlineRenameInvalidName => "ファイル名またはフォルダー名が無効です。",
+            Message::InlineRenameFailed => "名前を変更できませんでした。",
             Message::BatchRenameListingChanged => {
                 "一覧が変わりました。プレビューを閉じて開き直してください。"
             }
@@ -1505,6 +1509,8 @@ fn english(message: Message) -> Option<&'static str> {
         Message::BatchRenameCancel => "Cancel",
         Message::BatchRenameSubmit => "Rename",
         Message::BatchRenameNoChanges => "No changes",
+        Message::InlineRenameInvalidName => "Enter a valid file or folder name.",
+        Message::InlineRenameFailed => "Could not rename this item.",
         Message::BatchRenameListingChanged => "Listing changed; close and reopen the preview.",
         Message::ConflictHeading => "An item with the same name already exists",
         Message::ConflictAlreadyExists => "already exists",
