@@ -6,20 +6,27 @@
 //! **shell への問い合わせは重い。** 切れた network drive への `is_dir`、`\\wsl.localhost` の
 //! `read_dir`、volume label の取得はどれも数秒待ちうる。だから
 //!
-//! - 行の組み立て（[`rows`] とその内訳）は**解決済みの入力だけ**を受け取り、shell を触らない。
+//! - Windows の行の組み立て（`rows` とその内訳）は**解決済みの入力だけ**を受け取り、shell を触らない。
 //!   順序とラベルはここで単体テストできる。
 //! - shell を呼ぶのは `PcDrives` / `PcKnownFolders` / `PcWsl` の背景処理だけ。結果は asset と
 //!   して届き、届いたら描き直される（`DisplayNames` と同じ形）。**3つを別々に走らせる**ので、
 //!   遅い WSL の probe が drive の行を待たせない。
 //!
-//! 並べる順は v5 と同じ（known folders → drives → WSL）。v5 と違うのは、drives を
+//! Windows で並べる順は v5 と同じ（known folders → drives → WSL）。v5 と違うのは、drives を
 //! `GetLogicalDrives` の bitmask から取ること（v5 は `A:\` から `Z:\` へ `is_dir` していた）。
+//! 非 Windows では XDG の場所を背景で解決し、ファイルシステムのルートを末尾に並べる。
 
-use crate::{
-    directory::EntrySourceIdentity,
-    location::{Location, ShellRoot},
-};
-use std::{collections::HashMap, path::PathBuf};
+#[cfg(not(windows))]
+mod places;
+
+#[cfg(any(windows, test))]
+use crate::location::ShellRoot;
+use crate::{directory::EntrySourceIdentity, location::Location};
+#[cfg(not(windows))]
+use gpui_filer_resources::IconId;
+#[cfg(any(windows, test))]
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 /// PC に並ぶ 1 行。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,12 +43,19 @@ pub struct PcEntry {
 /// 行の種類。named Shell root は resource catalog の semantic icon を使う。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PcEntryKind {
+    #[cfg(any(windows, test))]
     KnownFolder,
+    #[cfg(any(windows, test))]
     Libraries,
+    #[cfg(any(windows, test))]
     Network,
+    #[cfg(any(windows, test))]
     RecycleBin,
     Drive,
+    #[cfg(any(windows, test))]
     WslDistribution,
+    #[cfg(not(windows))]
+    Place(IconId),
 }
 
 /// Shell namespace が返す virtual root の行。
@@ -66,6 +80,7 @@ pub enum ShellEntryKind {
 
 /// 解決済みの入力。shell を呼ぶ側が用意する。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg(any(windows, test))]
 pub struct PcSources {
     /// 存在する drive と、その volume label。label が無ければ名前は `C:\` の形になる。
     pub drives: Vec<(char, Option<String>)>,
@@ -80,6 +95,7 @@ pub struct PcSources {
 }
 
 /// 並べる順に組み立てる。shell は触らない。
+#[cfg(any(windows, test))]
 pub fn rows(sources: &PcSources) -> Vec<PcEntry> {
     let mut rows = known_folder_rows(&sources.known_folders, &sources.known_folder_identities);
     rows.push(PcEntry {
@@ -106,6 +122,7 @@ pub fn rows(sources: &PcSources) -> Vec<PcEntry> {
 }
 
 /// known folder の行。表示名は shell が返したものをそのまま使う。
+#[cfg(any(windows, test))]
 pub fn known_folder_rows(
     folders: &[(String, PathBuf)],
     identities: &HashMap<PathBuf, EntrySourceIdentity>,
@@ -122,6 +139,7 @@ pub fn known_folder_rows(
 }
 
 /// drive の行。label があれば `OS (C:)`、無ければ `C:\`。
+#[cfg(any(windows, test))]
 pub fn drive_rows(
     drives: &[(char, Option<String>)],
     identities: &HashMap<char, EntrySourceIdentity>,
@@ -141,6 +159,7 @@ pub fn drive_rows(
 }
 
 /// WSL distribution の行。列挙時に見つかった UNC path をそのまま開く。
+#[cfg(any(windows, test))]
 pub fn wsl_rows(distributions: &[(String, PathBuf)]) -> Vec<PcEntry> {
     distributions
         .iter()
@@ -159,6 +178,7 @@ pub fn wsl_rows(distributions: &[(String, PathBuf)]) -> Vec<PcEntry> {
 /// letter は `GetLogicalDrives` から即時に取れるが、label はあとから届く。遅い drive を
 /// 待たないために分けているので、届いていない label は `None` のままにして、行は `C:\` の
 /// 形で先に出す。
+#[cfg(any(windows, test))]
 pub fn drives_with_labels(
     letters: &[char],
     labels: &[(char, String)],
@@ -181,8 +201,10 @@ pub fn drives_with_labels(
 /// drive と known folder の行は先に出る。view は揃ったものから [`rows`] で並べる。
 ///
 /// この asset は letter だけを返す（メディアに触らないので即時）。label は [`PcDriveLabels`]。
+#[cfg(windows)]
 pub struct PcDrives;
 
+#[cfg(windows)]
 impl gpui::Asset for PcDrives {
     type Source = ();
     type Output = Vec<char>;
@@ -196,10 +218,6 @@ impl gpui::Asset for PcDrives {
             {
                 shell::drive_letters()
             }
-            #[cfg(not(windows))]
-            {
-                Vec::new()
-            }
         })
     }
 }
@@ -209,8 +227,10 @@ impl gpui::Asset for PcDrives {
 /// **行の表示をこれで待たせない。** label は drive に触るので、メディアの無いドライブや
 /// 切断された network drive では数分返ってこない（この機械の D: は 210 秒だった）。
 /// だから [`shell::label_is_safe`] が真の種類だけを聞き、他の行は `C:\` の名前のままになる。
+#[cfg(windows)]
 pub struct PcDriveLabels;
 
+#[cfg(windows)]
 impl gpui::Asset for PcDriveLabels {
     type Source = ();
     type Output = Vec<(char, String)>;
@@ -224,10 +244,6 @@ impl gpui::Asset for PcDriveLabels {
             {
                 shell::drive_labels()
             }
-            #[cfg(not(windows))]
-            {
-                Vec::new()
-            }
         })
     }
 }
@@ -237,7 +253,10 @@ pub struct PcKnownFolders;
 
 impl gpui::Asset for PcKnownFolders {
     type Source = ();
+    #[cfg(windows)]
     type Output = Vec<(String, PathBuf)>;
+    #[cfg(not(windows))]
+    type Output = Vec<PcEntry>;
 
     fn load(
         _source: Self::Source,
@@ -250,15 +269,29 @@ impl gpui::Asset for PcKnownFolders {
             }
             #[cfg(not(windows))]
             {
-                Vec::new()
+                places::known_folders()
             }
         })
     }
 }
 
+#[cfg(not(windows))]
+pub fn place_rows(mut known_folders: Vec<PcEntry>) -> Vec<PcEntry> {
+    // リムーバブルとリモートの mount は別の対応で列挙する。
+    known_folders.push(PcEntry {
+        name: "File System".into(),
+        target: Location::Path(PathBuf::from("/")),
+        kind: PcEntryKind::Drive,
+        source_identity: None,
+    });
+    known_folders
+}
+
 /// Capture one known-folder identity independently from row resolution.
+#[cfg(windows)]
 pub struct PcKnownFolderIdentity;
 
+#[cfg(windows)]
 impl gpui::Asset for PcKnownFolderIdentity {
     type Source = (PathBuf, u64);
     type Output = Option<EntrySourceIdentity>;
@@ -273,8 +306,10 @@ impl gpui::Asset for PcKnownFolderIdentity {
 }
 
 /// Drive roots receive identity independently so a slow/disconnected root never delays its row.
+#[cfg(windows)]
 pub struct PcDriveIdentity;
 
+#[cfg(windows)]
 impl gpui::Asset for PcDriveIdentity {
     type Source = (char, u64);
     type Output = Option<EntrySourceIdentity>;
@@ -293,8 +328,10 @@ impl gpui::Asset for PcDriveIdentity {
 /// PC の WSL distribution 行を背景で解決する asset。
 ///
 /// 一番遅くなりやすいので、他の2つと別に走らせる。
+#[cfg(windows)]
 pub struct PcWsl;
 
+#[cfg(windows)]
 impl gpui::Asset for PcWsl {
     type Source = ();
     type Output = Vec<(String, PathBuf)>;
@@ -307,10 +344,6 @@ impl gpui::Asset for PcWsl {
             #[cfg(windows)]
             {
                 shell::wsl_distributions()
-            }
-            #[cfg(not(windows))]
-            {
-                Vec::new()
             }
         })
     }

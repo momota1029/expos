@@ -1,0 +1,9 @@
+{
+  "comment": "PC の場所一覧を、fixture 内の XDG ユーザーディレクトリで撮影する。",
+  "steps": [
+    {"action": "size", "width": 1280, "height": 800},
+    {"action": "theme", "theme": "dark"},
+    {"action": "navigate", "target": "pc"},
+    {"action": "screenshot", "name": "places"}
+  ]
+}

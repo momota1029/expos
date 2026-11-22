@@ -1578,7 +1578,8 @@ pub(crate) struct FilerShell {
     /// Terminal launch completion ordering belongs to this Shell.
     terminal_request_ticket: u64,
     #[cfg(test)]
-    terminal_launch_observer: Option<Arc<std::sync::Mutex<Vec<crate::platform_terminal::Request>>>>,
+    terminal_launch_observer:
+        Option<Arc<std::sync::Mutex<Vec<crate::platform_terminal::LaunchRequest>>>>,
     #[cfg(test)]
     late_progress_observer_for_test: Option<std::sync::mpsc::Sender<(AttemptToken, bool)>>,
     #[cfg(test)]
@@ -73078,22 +73079,28 @@ fn ordinary_trash_shell_writer_child_crash_before_terminal_upsert(cx: &mut gpui:
             "item and background each admit one launch"
         );
         assert_eq!(requests[0].path, child);
-        assert_eq!(
-            requests[0].identity,
-            directory::EntrySourceIdentity::from_path(&child, EntryKind::Folder)
-                .expect("folder identity")
-                .filesystem_identity()
-        );
         assert_eq!(requests[1].path, path);
-        assert_eq!(
-            requests[1].identity,
-            visual.read_entity(&view, |view, _| {
-                view.session
-                    .directory_identity()
-                    .cloned()
-                    .expect("current directory identity")
-            })
-        );
+        let item_identity = directory::EntrySourceIdentity::from_path(&child, EntryKind::Folder)
+            .expect("folder identity")
+            .filesystem_identity();
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(requests[0].item_identity.as_ref(), Some(&item_identity));
+            assert_eq!(requests[1].item_identity, None);
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            assert_eq!(requests[0].identity, item_identity);
+            assert_eq!(
+                requests[1].identity,
+                visual.read_entity(&view, |view, _| {
+                    view.session
+                        .directory_identity()
+                        .cloned()
+                        .expect("current directory identity")
+                })
+            );
+        }
 
         let stale_target = visual.update(|_, cx| {
             shell.update(cx, |shell, cx| {

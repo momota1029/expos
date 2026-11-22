@@ -756,12 +756,21 @@ fn is_wsl_pc_key(key: &entry_identity::EntryKey) -> bool {
 
 fn pc_icon(kind: special::PcEntryKind) -> Option<IconId> {
     match kind {
+        #[cfg(any(windows, test))]
         special::PcEntryKind::Libraries => Some(IconId::Libraries),
+        #[cfg(any(windows, test))]
         special::PcEntryKind::Network => Some(IconId::Network),
+        #[cfg(any(windows, test))]
         special::PcEntryKind::RecycleBin => Some(IconId::RecycleBin),
+        #[cfg(any(windows, test))]
         special::PcEntryKind::KnownFolder
-        | special::PcEntryKind::Drive
         | special::PcEntryKind::WslDistribution => None,
+        #[cfg(windows)]
+        special::PcEntryKind::Drive => None,
+        #[cfg(not(windows))]
+        special::PcEntryKind::Drive => Some(IconId::Folder),
+        #[cfg(not(windows))]
+        special::PcEntryKind::Place(icon) => Some(icon),
     }
 }
 
@@ -4894,8 +4903,7 @@ impl DirectoryListDemo {
 
     /// PC の行を asset から受け取り、表示用の entries へ写す。
     ///
-    /// 3つの解決は別々に走るので、**届いたものから並べる**。順序は [`special::rows`] が
-    /// 決める。届く前は空で、状態行に「読み込み中」を出す。
+    /// 背景の解決を待たずに出せる行もあり、届いたものから順に写す。
     fn apply_pc_rows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ticket) = self.pc_ticket.clone() else {
             return;
@@ -4904,46 +4912,56 @@ impl DirectoryListDemo {
             return;
         }
         let folders = window.use_asset::<special::PcKnownFolders>(&(), cx);
-        let letters = window.use_asset::<special::PcDrives>(&(), cx);
-        let labels = window.use_asset::<special::PcDriveLabels>(&(), cx);
-        let wsl = window.use_asset::<special::PcWsl>(&(), cx);
-        let mut known_folder_identities = std::collections::HashMap::new();
-        for (_, path) in folders.as_deref().unwrap_or_default() {
-            let identity_source = (path.clone(), self.shell_icon_identity_generation);
-            if let Some(identity) =
-                window.use_asset::<special::PcKnownFolderIdentity>(&identity_source, cx)
-            {
-                if let Some(identity) = identity.clone() {
-                    known_folder_identities.insert(path.clone(), identity);
+        #[cfg(windows)]
+        let rows = {
+            let letters = window.use_asset::<special::PcDrives>(&(), cx);
+            let labels = window.use_asset::<special::PcDriveLabels>(&(), cx);
+            let wsl = window.use_asset::<special::PcWsl>(&(), cx);
+            let mut known_folder_identities = std::collections::HashMap::new();
+            for (_, path) in folders.as_deref().unwrap_or_default() {
+                let identity_source = (path.clone(), self.shell_icon_identity_generation);
+                if let Some(identity) =
+                    window.use_asset::<special::PcKnownFolderIdentity>(&identity_source, cx)
+                {
+                    if let Some(identity) = identity.clone() {
+                        known_folder_identities.insert(path.clone(), identity);
+                    }
                 }
             }
-        }
-        let mut drive_identities = std::collections::HashMap::new();
-        for letter in letters.as_deref().unwrap_or_default() {
-            let identity_source = (*letter, self.shell_icon_identity_generation);
-            if let Some(identity) =
-                window.use_asset::<special::PcDriveIdentity>(&identity_source, cx)
-            {
-                if let Some(identity) = identity.clone() {
-                    drive_identities.insert(*letter, identity);
+            let mut drive_identities = std::collections::HashMap::new();
+            for letter in letters.as_deref().unwrap_or_default() {
+                let identity_source = (*letter, self.shell_icon_identity_generation);
+                if let Some(identity) =
+                    window.use_asset::<special::PcDriveIdentity>(&identity_source, cx)
+                {
+                    if let Some(identity) = identity.clone() {
+                        drive_identities.insert(*letter, identity);
+                    }
                 }
             }
-        }
-        self.pc_base_sources_complete = folders.is_some() && letters.is_some();
-        self.pc_wsl_loaded = wsl.is_some();
-        // Libraries は同期で組み立てられる typed root。ほかの PC source がまだ届かなくても
-        // 先に出し、遅い network/WSL probe を入口の表示に結び付けない。
-        self.pc_loaded = true;
-        let rows = special::rows(&special::PcSources {
-            known_folders: folders.unwrap_or_default(),
-            known_folder_identities,
-            drives: special::drives_with_labels(
-                &letters.unwrap_or_default(),
-                &labels.unwrap_or_default(),
-            ),
-            drive_identities,
-            wsl_distributions: wsl.unwrap_or_default(),
-        });
+            self.pc_base_sources_complete = folders.is_some() && letters.is_some();
+            self.pc_wsl_loaded = wsl.is_some();
+            // Libraries は同期で組み立てられる typed root。ほかの PC source がまだ届かなくても
+            // 先に出し、遅い network/WSL probe を入口の表示に結び付けない。
+            self.pc_loaded = true;
+            special::rows(&special::PcSources {
+                known_folders: folders.unwrap_or_default(),
+                known_folder_identities,
+                drives: special::drives_with_labels(
+                    &letters.unwrap_or_default(),
+                    &labels.unwrap_or_default(),
+                ),
+                drive_identities,
+                wsl_distributions: wsl.unwrap_or_default(),
+            })
+        };
+        #[cfg(not(windows))]
+        let rows = {
+            self.pc_base_sources_complete = folders.is_some();
+            self.pc_wsl_loaded = true;
+            self.pc_loaded = true;
+            special::place_rows(folders.unwrap_or_default())
+        };
         if rows == self.pc_rows {
             // 同じ内容を毎フレーム書き戻さない。選択とスクロールを保つ。
             return;
@@ -4956,6 +4974,7 @@ impl DirectoryListDemo {
         self.shell_icon_generation = self.shell_icon_generation.wrapping_add(1);
         for row in &self.pc_rows {
             let (entry, key, target) = pc_entry(row);
+            #[cfg(windows)]
             if matches!(
                 row.kind,
                 special::PcEntryKind::KnownFolder | special::PcEntryKind::Drive

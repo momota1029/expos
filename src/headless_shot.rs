@@ -86,7 +86,8 @@ enum Step {
     },
     WaitIdle,
     Navigate {
-        path: PathBuf,
+        #[serde(flatten)]
+        destination: NavigateDestination,
     },
     Key {
         #[serde(alias = "key", deserialize_with = "parse_keys")]
@@ -105,6 +106,19 @@ enum Step {
     Screenshot {
         name: String,
     },
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum NavigateDestination {
+    Fixture { path: PathBuf },
+    Special { target: SpecialTarget },
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SpecialTarget {
+    Pc,
 }
 
 #[derive(Deserialize)]
@@ -162,7 +176,9 @@ impl Plan {
                     }
                     initial_size.get_or_insert((*width, *height));
                 }
-                Step::Navigate { path } if path.is_absolute() => {
+                Step::Navigate {
+                    destination: NavigateDestination::Fixture { path },
+                } if path.is_absolute() => {
                     return Err(
                         format!("step {}: navigate requires a relative path", index + 1).into(),
                     );
@@ -286,7 +302,9 @@ impl Runner {
                 cx.background_executor().timer(duration).await;
             }
             Step::WaitIdle => self.wait_idle(cx, until).await?,
-            Step::Navigate { path } => {
+            Step::Navigate {
+                destination: NavigateDestination::Fixture { path },
+            } => {
                 let destination = fs::canonicalize(self.fixture.join(&path))?;
                 if !destination.starts_with(&self.fixture) || !destination.is_dir() {
                     return Err(
@@ -294,6 +312,14 @@ impl Runner {
                     );
                 }
                 self.with_active_view(cx, |view, _, cx| view.navigate(destination, cx))?;
+            }
+            Step::Navigate {
+                destination:
+                    NavigateDestination::Special {
+                        target: SpecialTarget::Pc,
+                    },
+            } => {
+                self.with_active_view(cx, |view, _, cx| view.navigate_to_pc(cx))?;
             }
             Step::Key { keys } => {
                 for key in keys {
@@ -410,7 +436,8 @@ impl Runner {
                 if let Some(error) = status.error() {
                     return Err(format!("directory enumeration failed: {error}").into());
                 }
-                Ok(!status.is_loading())
+                // PC の session は、XDG の行が届く前に Ready になりうる。
+                Ok(!status.is_loading() && (!view.is_this_pc() || view.pc_base_sources_complete))
             })?
         })
         .await?;

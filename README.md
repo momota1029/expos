@@ -29,6 +29,12 @@ On Linux and other non-Windows platforms, expos uses these XDG directories. Unse
 
 Application options such as the selected theme and language are saved with the session. Session and journal persistence and per-folder preference updates are currently Windows-only.
 
+On non-Windows platforms, **System default** takes the first nonempty setting from `LC_ALL`, `LC_MESSAGES`, and `LANG`. English locales select English. Japanese, `C`, `POSIX`, and unsupported locales use Japanese.
+
+On Linux, **Open in Terminal** starts a terminal in the selected folder or the current folder when invoked from the blank area. expos uses `TERMINAL` as an executable name or path, then tries `x-terminal-emulator` and common terminal emulators on `PATH`.
+
+On Linux, the PC view lists Home, existing XDG user directories, and **File System** (`/`). Removable and remote mounts are deferred.
+
 ## Video preview support
 
 Video still-frame previews require `ffmpeg` on `PATH`. `ffprobe` is optional and provides metadata and seeking support. Install FFmpeg separately, add its executable directory to `PATH`, then restart expos. Other preview capabilities do not require these tools.

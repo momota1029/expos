@@ -1,4 +1,4 @@
-//! Windows Terminal の detached launch adapter.
+//! 端末を非同期で起動するプラットフォームアダプター。
 
 use crate::filesystem_identity::FilesystemIdentity;
 
@@ -74,7 +74,11 @@ fn pin_route(request: &Request) -> Result<PinnedRoute, LaunchError> {
     Ok(PinnedRoute { _handles: handles })
 }
 
-pub(crate) fn launch(request: &Request) -> Result<(), LaunchError> {
+#[cfg(not(target_os = "linux"))]
+pub(crate) type LaunchRequest = Request;
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn launch(request: &LaunchRequest) -> Result<(), LaunchError> {
     #[cfg(windows)]
     {
         let _route = pin_route(request)?;
@@ -89,6 +93,214 @@ pub(crate) fn launch(request: &Request) -> Result<(), LaunchError> {
     {
         let _ = request;
         Err(LaunchError::Unavailable)
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) use linux::{LaunchRequest, launch};
+
+#[cfg(target_os = "linux")]
+mod linux {
+    use super::{FilesystemIdentity, LaunchError};
+    use crate::directory::{EntryKind, EntrySourceIdentity};
+    use std::{
+        ffi::{OsStr, OsString},
+        os::unix::{fs::PermissionsExt, process::CommandExt},
+        path::{Path, PathBuf},
+        process::{Command, Stdio},
+    };
+
+    #[derive(Clone, Debug)]
+    pub(crate) struct LaunchRequest {
+        pub path: PathBuf,
+        pub item_identity: Option<FilesystemIdentity>,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum DirectoryArgument {
+        Inherited,
+        Separate(&'static [&'static str]),
+        Joined(&'static str),
+    }
+
+    fn terminal_candidates(
+        override_program: Option<&OsStr>,
+        mut lookup: impl FnMut(&OsStr) -> Option<PathBuf>,
+    ) -> impl Iterator<Item = (PathBuf, DirectoryArgument)> {
+        use DirectoryArgument::{Inherited, Joined, Separate};
+
+        let fallbacks = [
+            ("x-terminal-emulator", Inherited),
+            ("gnome-terminal", Joined("--working-directory=")),
+            ("konsole", Separate(&["--workdir"])),
+            ("xfce4-terminal", Joined("--working-directory=")),
+            ("kitty", Separate(&["--directory"])),
+            ("alacritty", Separate(&["--working-directory"])),
+            ("wezterm", Separate(&["start", "--cwd"])),
+            ("foot", Separate(&["-D"])),
+            ("xterm", Inherited),
+        ];
+        override_program
+            .filter(|program| !program.is_empty())
+            .map(|program| (program, Inherited))
+            .into_iter()
+            .chain(
+                fallbacks
+                    .into_iter()
+                    .map(|(name, argument)| (OsStr::new(name), argument)),
+            )
+            .filter_map(move |(name, argument)| lookup(name).map(|path| (path, argument)))
+    }
+
+    fn executable_path(path: &Path) -> Option<PathBuf> {
+        let path = std::path::absolute(path).ok()?;
+        let metadata = path.metadata().ok()?;
+        (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0).then_some(path)
+    }
+
+    fn find_on_path(program: &OsStr, path: Option<&OsStr>) -> Option<PathBuf> {
+        // 起動先の cwd に変わる前に、アプリ側の相対パスや PATH を解決する。
+        if program.as_encoded_bytes().contains(&b'/') {
+            return executable_path(Path::new(program));
+        }
+        std::env::split_paths(path?).find_map(|directory| executable_path(&directory.join(program)))
+    }
+
+    fn terminal_command(executable: &Path, argument: DirectoryArgument, path: &Path) -> Command {
+        let mut command = Command::new(executable);
+        command.current_dir(path);
+        match argument {
+            DirectoryArgument::Inherited => {}
+            DirectoryArgument::Separate(flags) => {
+                command.args(flags).arg(path);
+            }
+            DirectoryArgument::Joined(flag) => {
+                let mut arg = OsString::from(flag);
+                arg.push(path);
+                command.arg(arg);
+            }
+        }
+        command
+    }
+
+    pub(crate) fn launch(request: &LaunchRequest) -> Result<(), LaunchError> {
+        if !request.path.is_absolute() {
+            return Err(LaunchError::DirectoryChanged);
+        }
+        let directory_matches = match &request.item_identity {
+            Some(expected) => {
+                request
+                    .path
+                    .symlink_metadata()
+                    .is_ok_and(|metadata| metadata.is_dir())
+                    && EntrySourceIdentity::from_path_no_follow(&request.path, EntryKind::Folder)
+                        .is_some_and(|actual| actual.filesystem_identity() == *expected)
+            }
+            None => request.path.is_dir(),
+        };
+        if !directory_matches {
+            return Err(LaunchError::DirectoryChanged);
+        }
+
+        let override_program = std::env::var_os("TERMINAL");
+        let path = std::env::var_os("PATH");
+        let mut child = terminal_candidates(override_program.as_deref(), |name| {
+            find_on_path(name, path.as_deref())
+        })
+        .find_map(|(executable, argument)| {
+            terminal_command(&executable, argument, &request.path)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .process_group(0)
+                .spawn()
+                .ok()
+        })
+        .ok_or(LaunchError::Unavailable)?;
+        // 起動元は待たず、終了した子プロセスだけを別スレッドで回収する。
+        let _ = std::thread::Builder::new()
+            .name("terminal-reaper".into())
+            .spawn(move || {
+                let _ = child.wait();
+            });
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn override_is_one_executable_and_precedes_automatic_candidates() {
+            let override_program = OsStr::new("/test/custom terminal");
+            let selected = terminal_candidates(Some(override_program), |name| {
+                assert_eq!(name, override_program);
+                Some(PathBuf::from(name))
+            })
+            .next();
+            assert_eq!(
+                selected,
+                Some((
+                    PathBuf::from(override_program),
+                    DirectoryArgument::Inherited
+                ))
+            );
+        }
+
+        #[test]
+        fn missing_or_empty_override_uses_the_first_available_fallback() {
+            let lookup = |name: &OsStr| {
+                ["x-terminal-emulator", "gnome-terminal", "xterm"]
+                    .iter()
+                    .any(|candidate| name == OsStr::new(candidate))
+                    .then(|| Path::new("/test/bin").join(name))
+            };
+            for override_program in ["missing", ""] {
+                assert_eq!(
+                    terminal_candidates(Some(OsStr::new(override_program)), lookup).next(),
+                    Some((
+                        "/test/bin/x-terminal-emulator".into(),
+                        DirectoryArgument::Inherited,
+                    ))
+                );
+            }
+        }
+
+        #[test]
+        fn terminal_candidates_have_ordered_and_structured_working_directory_arguments() {
+            let directory = Path::new("/test/作業 フォルダー");
+            let expected = [
+                ("x-terminal-emulator", vec![]),
+                (
+                    "gnome-terminal",
+                    vec!["--working-directory=/test/作業 フォルダー"],
+                ),
+                ("konsole", vec!["--workdir", "/test/作業 フォルダー"]),
+                (
+                    "xfce4-terminal",
+                    vec!["--working-directory=/test/作業 フォルダー"],
+                ),
+                ("kitty", vec!["--directory", "/test/作業 フォルダー"]),
+                (
+                    "alacritty",
+                    vec!["--working-directory", "/test/作業 フォルダー"],
+                ),
+                ("wezterm", vec!["start", "--cwd", "/test/作業 フォルダー"]),
+                ("foot", vec!["-D", "/test/作業 フォルダー"]),
+                ("xterm", vec![]),
+            ];
+            let mut candidates =
+                terminal_candidates(None, |name| Some(Path::new("/test/bin").join(name)));
+            for (expected_program, expected_args) in expected {
+                let (program, argument) = candidates.next().expect("remaining terminal");
+                assert_eq!(program, Path::new("/test/bin").join(expected_program));
+                let command = terminal_command(&program, argument, directory);
+                assert_eq!(command.get_current_dir(), Some(directory));
+                assert!(command.get_args().eq(expected_args.iter().map(OsStr::new)));
+            }
+            assert_eq!(candidates.next(), None);
+            assert_eq!(terminal_candidates(None, |_| None).next(), None);
+        }
     }
 }
 

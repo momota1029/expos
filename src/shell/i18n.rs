@@ -87,7 +87,28 @@ pub(crate) fn system_locale() -> Locale {
         return locale_from_windows_language_id(language);
     }
     #[cfg(not(windows))]
-    Locale::Japanese
+    locale_from_environment(|name| std::env::var(name).ok())
+}
+
+#[cfg(not(windows))]
+fn locale_from_environment(mut lookup: impl FnMut(&str) -> Option<String>) -> Locale {
+    let locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .into_iter()
+        .filter_map(|name| lookup(name))
+        .find(|value| !value.trim().is_empty());
+    let language = locale
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .split(['_', '-', '.', '@'])
+        .next()
+        .unwrap_or_default();
+    if language.eq_ignore_ascii_case("en") {
+        Locale::English
+    } else {
+        // C / POSIX（headless capture の C.UTF-8 を含む）と未対応言語は既定の日本語を使う。
+        Locale::Japanese
+    }
 }
 
 fn locale_from_windows_language_id(language: u16) -> Locale {
@@ -891,7 +912,11 @@ impl Translator {
             Message::CreateShortcut => "ショートカットを作成",
             Message::Create7z => "7z に圧縮",
             Message::ExtractToFolder => "フォルダーに展開",
+            Message::OpenInWindowsTerminal if cfg!(target_os = "linux") => "端末で開く",
             Message::OpenInWindowsTerminal => "Windows Terminal で開く",
+            Message::WindowsTerminalLaunchFailed if cfg!(target_os = "linux") => {
+                "端末を起動できませんでした"
+            }
             Message::WindowsTerminalLaunchFailed => "Windows Terminal を起動できませんでした",
             Message::Rename => "名前を変更",
             Message::Properties => "プロパティ",
@@ -1505,7 +1530,11 @@ fn english(message: Message) -> Option<&'static str> {
         Message::CreateShortcut => "Create shortcut",
         Message::Create7z => "Compress to 7z",
         Message::ExtractToFolder => "Extract to folder",
+        Message::OpenInWindowsTerminal if cfg!(target_os = "linux") => "Open in Terminal",
         Message::OpenInWindowsTerminal => "Open in Windows Terminal",
+        Message::WindowsTerminalLaunchFailed if cfg!(target_os = "linux") => {
+            "Could not start a terminal"
+        }
         Message::WindowsTerminalLaunchFailed => "Could not start Windows Terminal",
         Message::Rename => "Rename",
         Message::Properties => "Properties",
@@ -1555,6 +1584,46 @@ fn group_source_decimal(value: usize) -> String {
 mod tests {
     use super::*;
     use std::time::{Duration, UNIX_EPOCH};
+
+    #[cfg(not(windows))]
+    #[test]
+    fn environment_locale_uses_the_first_non_empty_value() {
+        let variables = [
+            ("LC_ALL", "ja_JP.UTF-8"),
+            ("LC_MESSAGES", "en_US.UTF-8"),
+            ("LANG", "ja_JP.UTF-8"),
+        ];
+        let resolve = |values: &[(&str, &str)]| {
+            locale_from_environment(|name| {
+                values
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| value.to_string())
+            })
+        };
+        assert_eq!(resolve(&variables), Locale::Japanese);
+        assert_eq!(resolve(&variables[1..]), Locale::English);
+        assert_eq!(resolve(&variables[2..]), Locale::Japanese);
+        assert_eq!(
+            resolve(&[("LC_ALL", ""), ("LC_MESSAGES", ""), ("LANG", "en_GB")]),
+            Locale::English
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn headless_and_unsupported_environment_locales_use_the_japanese_default() {
+        for value in ["C", "C.UTF-8", "POSIX", "fr_FR.UTF-8"] {
+            let locale = locale_from_environment(|name| match name {
+                "LC_ALL" => Some(value.into()),
+                "LANG" => Some("en_US.UTF-8".into()),
+                _ => None,
+            });
+            assert_eq!(locale, Locale::Japanese, "{value}");
+            assert_eq!(LanguageOverride::English.resolve(locale), Locale::English);
+        }
+        assert_eq!(locale_from_environment(|_| None), Locale::Japanese);
+    }
 
     #[test]
     fn unsupported_rtl_windows_languages_fall_back_to_japanese() {

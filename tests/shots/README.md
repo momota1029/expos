@@ -7,6 +7,7 @@ bash scripts/shot.sh --repeat 2 tests/shots/fixtures/basic tests/shots/rows.json
 bash scripts/shot.sh --repeat 2 tests/shots/fixtures/basic tests/shots/navigation.json
 bash scripts/shot.sh --repeat 2 tests/shots/fixtures/basic tests/shots/views.json
 bash scripts/shot.sh --repeat 2 tests/shots/fixtures/basic tests/shots/keyboard.json
+bash scripts/shot.sh --repeat 2 tests/shots/fixtures/places tests/shots/places.json
 ```
 
 An optional last argument overrides the output directory. Each pass starts with
@@ -26,3 +27,6 @@ While the address field is being edited, it shows the real path for navigation.
 The capture runner clears hover and waits for visible
 thumbnails before saving a PNG. Keyboard focus styling stays active for keyboard
 scenarios. Capture windows start at a fixed origin with reduced motion enabled.
+
+The places scenario opens the PC view. The runner maps the fixture's Documents
+and Pictures directories through a private XDG user-dirs file.

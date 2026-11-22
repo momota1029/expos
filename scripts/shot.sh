@@ -152,6 +152,19 @@ chmod -R u+rwX -- "$run/fixture"
 # Git checkouts and generated fixtures can have different timestamps on disk.
 TZ=UTC find "$run/fixture" -exec touch -h -m -d '2020-01-02 03:04:05' -- {} +
 
+# Point XDG places at the fixture copy so their paths use the fixture display mapping.
+places_root=$run/fixture
+places_root=${places_root//\\/\\\\}
+places_root=${places_root//\"/\\\"}
+places_root=${places_root//\$/\\\$}
+places_root=${places_root//\`/\\\`}
+for place in DESKTOP:Desktop DOCUMENTS:Documents DOWNLOAD:Downloads MUSIC:Music PICTURES:Pictures VIDEOS:Videos; do
+    name=${place#*:}
+    if [[ -d $run/fixture/$name ]]; then
+        printf 'XDG_%s_DIR="%s/%s"\n' "${place%:*}" "$places_root" "$name" >>"$run/config/user-dirs.dirs"
+    fi
+done
+
 # Minimal installations may supply the runtime sonames only.
 for entry in xcb:1 xkbcommon:0 xkbcommon-x11:0; do
     name=lib${entry%:*}.so

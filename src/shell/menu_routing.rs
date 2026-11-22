@@ -6,6 +6,57 @@ pub(super) fn context_menu_view_available(batch_rename_active: bool) -> bool {
     !batch_rename_active
 }
 
+fn terminal_launch_request(
+    view: &DirectoryListDemo,
+    target: &menu::MenuTarget,
+) -> Option<crate::platform_terminal::LaunchRequest> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        view.terminal_request_for_menu_target(target)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let directory = view.session.location()?.path()?;
+        if !crate::zip_menu_revision_is_current(
+            target.generation,
+            target.presentation_revision,
+            view.location_generation,
+            view.presentation_revision,
+        ) || !view.session.has_accepted_current_listing()
+        {
+            return None;
+        }
+        if let Some(clicked) = &target.item {
+            let [key] = target.context_keys.as_slice() else {
+                return None;
+            };
+            if clicked != key || !matches!(key, entry_identity::EntryKey::Path { .. }) {
+                return None;
+            }
+            let entry = view.entries.iter().find(|entry| &entry.key == key)?;
+            let path = entry.path.as_ref()?;
+            let identity = entry.source_identity.as_ref()?;
+            if entry.kind != EntryKind::Folder
+                || entry.is_link()
+                || identity.kind != EntryKind::Folder
+                || path.parent() != Some(directory)
+            {
+                return None;
+            }
+            return Some(crate::platform_terminal::LaunchRequest {
+                path: path.clone(),
+                item_identity: Some(identity.filesystem_identity()),
+            });
+        }
+        let path = target.background_destination.as_ref()?;
+        // Linux の一覧は親ディレクトリの identity を持たないため、現在の一覧と path を照合する。
+        (path == directory).then(|| crate::platform_terminal::LaunchRequest {
+            path: path.clone(),
+            item_identity: None,
+        })
+    }
+}
+
 #[cfg(test)]
 mod batch_rename_modal_tests {
     use super::{captured_single_item_rename_target, context_menu_view_available};
@@ -758,11 +809,7 @@ impl FilerShell {
                     checked: false,
                 });
             }
-            if view
-                .read(cx)
-                .terminal_request_for_menu_target(target)
-                .is_some()
-            {
+            if terminal_launch_request(view.read(cx), target).is_some() {
                 rows.push(menu::Entry {
                     action: ActionId::new(menu::OPEN_IN_TERMINAL),
                     label: self
@@ -776,10 +823,7 @@ impl FilerShell {
         }
         if open == menu::Open::Popup(menu::Popup::Background)
             && let Some(target) = menu_target
-            && view
-                .read(cx)
-                .terminal_request_for_menu_target(target)
-                .is_some()
+            && terminal_launch_request(view.read(cx), target).is_some()
         {
             rows.push(menu::Entry {
                 action: ActionId::new(menu::OPEN_IN_TERMINAL),
@@ -2032,8 +2076,7 @@ impl FilerShell {
             return;
         }
         if action == ActionId::new(menu::OPEN_IN_TERMINAL) {
-            let Some(request) =
-                view.update(cx, |view, _| view.terminal_request_for_menu_target(&target))
+            let Some(request) = view.update(cx, |view, _| terminal_launch_request(view, &target))
             else {
                 return;
             };
@@ -2076,11 +2119,7 @@ impl FilerShell {
                     };
                     if pane.id != captured_target.pane
                         || pane.directory().active_tab_id != captured_target.tab
-                        || tab
-                            .view
-                            .read(cx)
-                            .terminal_request_for_menu_target(&captured_target)
-                            .is_none()
+                        || terminal_launch_request(tab.view.read(cx), &captured_target).is_none()
                     {
                         return;
                     }
