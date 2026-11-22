@@ -5,6 +5,7 @@ Run two independent captures of the same scenario on the same Linux host.
 ```bash
 bash scripts/shot.sh --repeat 2 tests/shots/fixtures/basic tests/shots/rows.json
 bash scripts/shot.sh --repeat 2 tests/shots/fixtures/basic tests/shots/navigation.json
+bash scripts/shot.sh --repeat 2 tests/shots/fixtures/basic tests/shots/tab-pin.json
 bash scripts/shot.sh --repeat 2 tests/shots/fixtures/basic tests/shots/views.json
 bash scripts/shot.sh --repeat 2 tests/shots/fixtures/basic tests/shots/keyboard.json
 bash scripts/shot.sh --repeat 2 tests/shots/fixtures/places tests/shots/places.json

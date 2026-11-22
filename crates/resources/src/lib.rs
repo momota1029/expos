@@ -278,13 +278,14 @@ impl IconId {
                 "tiles",
                 IconSource::Svg("icons/fluent-system/grid_16_regular.svg"),
             ),
+            // タブでは操作名に対応する ID で現在の固定状態を描く。
             Lock => (
-                "lock",
-                IconSource::Svg("icons/fluent-system/lock_closed_16_regular.svg"),
+                "pin",
+                IconSource::Svg("icons/fluent-system/pin_off_16_regular.svg"),
             ),
             Unlock => (
-                "unlock",
-                IconSource::Svg("icons/fluent-system/lock_open_16_regular.svg"),
+                "unpin",
+                IconSource::Svg("icons/fluent-system/pin_16_filled.svg"),
             ),
             Warning => (
                 "warning",
@@ -538,17 +539,17 @@ impl AssetSource for ResourceAssets {
             "icons/fluent-system/list_bar_tree_offset_16_regular.svg" => Some(include_bytes!(
                 "../assets/icons/fluent-system/list_bar_tree_offset_16_regular.svg"
             )),
-            "icons/fluent-system/lock_closed_16_regular.svg" => Some(include_bytes!(
-                "../assets/icons/fluent-system/lock_closed_16_regular.svg"
-            )),
-            "icons/fluent-system/lock_open_16_regular.svg" => Some(include_bytes!(
-                "../assets/icons/fluent-system/lock_open_16_regular.svg"
-            )),
             "icons/fluent-system/navigation_16_regular.svg" => Some(include_bytes!(
                 "../assets/icons/fluent-system/navigation_16_regular.svg"
             )),
             "icons/fluent-system/open_16_regular.svg" => Some(include_bytes!(
                 "../assets/icons/fluent-system/open_16_regular.svg"
+            )),
+            "icons/fluent-system/pin_16_filled.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/pin_16_filled.svg"
+            )),
+            "icons/fluent-system/pin_off_16_regular.svg" => Some(include_bytes!(
+                "../assets/icons/fluent-system/pin_off_16_regular.svg"
             )),
             "icons/fluent-system/rename_16_regular.svg" => Some(include_bytes!(
                 "../assets/icons/fluent-system/rename_16_regular.svg"

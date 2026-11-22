@@ -1,0 +1,12 @@
+{
+  "comment": "単一タブの固定ボタンをクリックし、固定前・固定中・解除後を比較する。撮影時にはホバーが解除される。",
+  "steps": [
+    {"action": "size", "width": 1280, "height": 800},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "tab-unpinned"},
+    {"action": "click", "x": 154, "y": 74},
+    {"action": "screenshot", "name": "tab-pinned"},
+    {"action": "click", "x": 154, "y": 74},
+    {"action": "screenshot", "name": "tab-unpinned-again"}
+  ]
+}
