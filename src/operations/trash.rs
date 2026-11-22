@@ -1,18 +1,21 @@
 //! Recycle-bin adapter with opaque restore receipts.
 
-use std::{
-    ffi::OsString,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 use std::collections::HashSet;
+#[cfg(not(target_os = "linux"))]
+use std::ffi::OsString;
 
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(windows)]
 mod windows;
 #[derive(Clone)]
 pub struct TrashReceipt {
     item: ::trash::TrashItem,
+    #[cfg(target_os = "linux")]
+    linux_entry: linux::TrashEntry,
     #[cfg(all(test, windows))]
     restore_probe: std::sync::Arc<std::sync::Mutex<RestoreProbeState>>,
 }
@@ -156,12 +159,13 @@ impl TrashReceipt {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TrashError {
     Platform(String),
+    #[cfg(not(any(windows, target_os = "linux")))]
     ReceiptMissing,
     MutationUncertain(String),
     RestoreCollision(PathBuf),
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn move_to_trash(path: &Path) -> Result<TrashReceipt, TrashError> {
     let before: HashSet<OsString> = ::trash::os_limited::list()
         .map_err(platform)?
@@ -183,14 +187,18 @@ pub fn move_to_trash(path: &Path) -> Result<TrashReceipt, TrashError> {
 
 pub fn restore(receipt: TrashReceipt) -> Result<RestoreDisposition, TrashError> {
     let target = receipt.item.original_path();
-    #[cfg(test)]
+    #[cfg(all(test, windows))]
     let probe_receipt = receipt.clone();
     let result = restore_if_target_missing(&target, || {
         #[cfg(windows)]
         {
             windows::restore(receipt)
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        {
+            linux::restore(receipt)
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
         {
             ::trash::os_limited::restore_all([receipt.item])
                 .map(|()| RestoreDisposition::Completed)
@@ -215,7 +223,11 @@ pub fn move_to_trash_with_identity(
     {
         windows::move_to_trash_with_identity(path, accepted)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        linux::move_to_trash(path, accepted)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = accepted;
         move_to_trash(path)
@@ -237,16 +249,21 @@ pub(crate) fn admit_source(
                 "reparse Trash is unsupported".into(),
             ));
         }
-        let current = crate::directory::EntrySourceIdentity::from_path_no_follow(
-            path,
-            guard.identity.kind,
-        );
-        if current.as_ref() == Some(&guard.identity) {
-            Ok(None)
-        } else {
-            Err(TrashError::Platform(
-                "Trash source identity changed or is unsupported".into(),
-            ))
+        #[cfg(target_os = "linux")]
+        return linux::check_source(path, &guard.identity).map(|_| None);
+        #[cfg(not(target_os = "linux"))]
+        {
+            let current = crate::directory::EntrySourceIdentity::from_path_no_follow(
+                path,
+                guard.identity.kind,
+            );
+            if current.as_ref() == Some(&guard.identity) {
+                Ok(None)
+            } else {
+                Err(TrashError::Platform(
+                    "Trash source identity changed or is unsupported".into(),
+                ))
+            }
         }
     }
 }

@@ -9,17 +9,21 @@
 //! row height、hover、operation job の再実行指示。閉じたタブ用に navigation values と
 //! その bookmark は保存するが、runtime object や列挙結果は持ち込まない。
 //!
-//! 保存する path は lossless に運ぶ。`to_string_lossy` を通すと孤立 surrogate が
-//! 置換文字になり、保存したつもりの path が復元できない。
+//! 保存する path は lossless に運ぶ。Windows の孤立 surrogate や Unix の非 UTF-8
+//! byte を置換文字にすると、保存した path が復元できない。
 
 mod file;
-#[cfg(not(windows))]
+#[cfg(unix)]
+mod unix;
+#[cfg(not(any(windows, unix)))]
 mod unsupported;
 #[cfg(windows)]
 mod windows;
 
 pub(crate) use file::SessionPaths;
-#[cfg(not(windows))]
+#[cfg(unix)]
+pub(crate) use unix::SessionFile;
+#[cfg(not(any(windows, unix)))]
 pub(crate) use unsupported::SessionFile;
 #[cfg(windows)]
 pub(crate) use windows::SessionFile;
@@ -83,6 +87,7 @@ pub(crate) enum RestoreOutcome {
 /// - primary が無ければ `Absent`。backup だけから復元しない。
 /// - future schema は読むだけで上書きしない。古い backup へも降りない
 ///   （降りると、新しい版の保存を古い内容で置換してしまう）。
+/// - 別 OS の primary は保持し、起動時に理由を知らせる。
 /// - 壊れた primary は保持し、valid な backup があればそれを使う。
 pub(crate) fn resolve_restore(primary: Option<&[u8]>, backup: Option<&[u8]>) -> RestoreOutcome {
     let Some(primary) = primary else {
@@ -91,6 +96,9 @@ pub(crate) fn resolve_restore(primary: Option<&[u8]>, backup: Option<&[u8]>) -> 
     match SessionSnapshot::from_json(primary) {
         Ok(snapshot) => RestoreOutcome::Restored(Box::new(snapshot)),
         Err(SessionError::FutureSchema { found, .. }) => RestoreOutcome::FutureSchema { found },
+        Err(error @ SessionError::UnsupportedPlatform) => {
+            RestoreOutcome::Unreadable(error.to_string())
+        }
         Err(primary_error) => match backup.map(SessionSnapshot::from_json) {
             Some(Ok(snapshot)) => RestoreOutcome::Restored(Box::new(snapshot)),
             _ => RestoreOutcome::Unreadable(primary_error.to_string()),
@@ -112,7 +120,6 @@ pub enum SessionError {
     /// path として不正（空、NUL、相対、長すぎる）。
     InvalidPath(String),
     /// この OS では復元できない。別 OS の path をそのまま解釈しない。
-    #[allow(dead_code)] // Windows 以外の実装でだけ作られる。
     UnsupportedPlatform,
 }
 
@@ -126,7 +133,9 @@ impl std::fmt::Display for SessionError {
             Self::LimitExceeded(what) => write!(f, "session exceeds the {what} limit"),
             Self::DuplicateTabKey(key) => write!(f, "duplicate tab key {key}"),
             Self::InvalidPath(reason) => write!(f, "invalid path: {reason}"),
-            Self::UnsupportedPlatform => write!(f, "unsupported platform"),
+            Self::UnsupportedPlatform => {
+                write!(f, "session path belongs to an unsupported platform")
+            }
         }
     }
 }
@@ -138,6 +147,9 @@ pub enum PathValue {
     /// Windows の `OsString` を UTF-16 code unit のまま。
     #[serde(rename = "windows-utf16")]
     WindowsUtf16 { units: Vec<u16> },
+    /// Unix の `OsStr` を UTF-8 へ変換せず、元の byte 列のまま保存する。
+    #[serde(rename = "unix-bytes")]
+    UnixBytes { bytes: Vec<u8> },
 }
 
 /// 保存する location。path を持たない仮想の場所を偽の path で表さない。
@@ -252,9 +264,9 @@ impl LocationValue {
 
     pub fn validate(&self) -> Result<(), SessionError> {
         match self {
-            Self::Path { path } => path.validate(),
+            Self::Path { path } => path.validate_for_platform(),
             Self::Archive { source, components } => {
-                source.validate()?;
+                source.validate_for_platform()?;
                 validate_archive_components(components)
             }
             Self::ThisPc => Ok(()),
@@ -317,7 +329,16 @@ impl PathValue {
             value.validate()?;
             Ok(value)
         }
-        #[cfg(not(windows))]
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt as _;
+            let bytes = path.as_os_str().as_bytes();
+            validate_unix_bytes(bytes)?;
+            Ok(Self::UnixBytes {
+                bytes: bytes.to_vec(),
+            })
+        }
+        #[cfg(not(any(windows, unix)))]
         {
             let _ = path;
             Err(SessionError::UnsupportedPlatform)
@@ -325,53 +346,85 @@ impl PathValue {
     }
 
     pub fn to_path_buf(&self) -> Result<PathBuf, SessionError> {
-        #[cfg(windows)]
-        {
-            use std::os::windows::ffi::OsStringExt as _;
-            let Self::WindowsUtf16 { units } = self;
-            Ok(std::ffi::OsString::from_wide(units).into())
+        match self {
+            #[cfg(windows)]
+            Self::WindowsUtf16 { units } => {
+                use std::os::windows::ffi::OsStringExt as _;
+                Ok(std::ffi::OsString::from_wide(units).into())
+            }
+            #[cfg(unix)]
+            Self::UnixBytes { bytes } => {
+                use std::os::unix::ffi::OsStrExt as _;
+                validate_unix_bytes(bytes)?;
+                Ok(PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
+            }
+            _ => Err(SessionError::UnsupportedPlatform),
         }
-        #[cfg(not(windows))]
-        {
-            Err(SessionError::UnsupportedPlatform)
+    }
+
+    fn validate_for_platform(&self) -> Result<(), SessionError> {
+        match self {
+            #[cfg(windows)]
+            Self::WindowsUtf16 { .. } => self.validate(),
+            #[cfg(unix)]
+            Self::UnixBytes { .. } => self.validate(),
+            _ => Err(SessionError::UnsupportedPlatform),
         }
     }
 
     /// 保存できる形か。
     ///
-    /// NUL と相対 path を拒否し、長さの上限を見る。drive 絶対 (`C:\`) か
-    /// UNC (`\\server\share`) だけを許す。
+    /// NUL と相対 path を拒否し、長さの上限を見る。
     pub fn validate(&self) -> Result<(), SessionError> {
-        let Self::WindowsUtf16 { units } = self;
-        if units.is_empty() {
-            return Err(SessionError::InvalidPath("empty".into()));
-        }
-        if units.len() > MAX_PATH_UNITS {
-            return Err(SessionError::LimitExceeded("path length"));
-        }
-        if units.contains(&0) {
-            return Err(SessionError::InvalidPath("NUL".into()));
-        }
-        let backslash = b'\\' as u16;
-        let slash = b'/' as u16;
-        let is_separator = |unit: u16| unit == backslash || unit == slash;
-        let letter = |unit: u16| {
-            (b'A' as u16..=b'Z' as u16).contains(&unit)
-                || (b'a' as u16..=b'z' as u16).contains(&unit)
-        };
-        // `C:\` か `C:/`
-        let drive_absolute = units.len() >= 3
-            && letter(units[0])
-            && units[1] == b':' as u16
-            && is_separator(units[2]);
-        // `\\server\share`
-        let unc = units.len() >= 5 && is_separator(units[0]) && is_separator(units[1]);
-        if drive_absolute || unc {
-            Ok(())
-        } else {
-            Err(SessionError::InvalidPath("relative".into()))
+        match self {
+            Self::WindowsUtf16 { units } => validate_windows_units(units),
+            Self::UnixBytes { bytes } => validate_unix_bytes(bytes),
         }
     }
+}
+
+fn validate_windows_units(units: &[u16]) -> Result<(), SessionError> {
+    if units.is_empty() {
+        return Err(SessionError::InvalidPath("empty".into()));
+    }
+    if units.len() > MAX_PATH_UNITS {
+        return Err(SessionError::LimitExceeded("path length"));
+    }
+    if units.contains(&0) {
+        return Err(SessionError::InvalidPath("NUL".into()));
+    }
+    let backslash = b'\\' as u16;
+    let slash = b'/' as u16;
+    let is_separator = |unit: u16| unit == backslash || unit == slash;
+    let letter = |unit: u16| {
+        (b'A' as u16..=b'Z' as u16).contains(&unit) || (b'a' as u16..=b'z' as u16).contains(&unit)
+    };
+    // `C:\` か `C:/`
+    let drive_absolute =
+        units.len() >= 3 && letter(units[0]) && units[1] == b':' as u16 && is_separator(units[2]);
+    // `\\server\share`
+    let unc = units.len() >= 5 && is_separator(units[0]) && is_separator(units[1]);
+    if drive_absolute || unc {
+        Ok(())
+    } else {
+        Err(SessionError::InvalidPath("relative".into()))
+    }
+}
+
+fn validate_unix_bytes(bytes: &[u8]) -> Result<(), SessionError> {
+    if bytes.is_empty() {
+        return Err(SessionError::InvalidPath("empty".into()));
+    }
+    if bytes.len() > MAX_PATH_UNITS {
+        return Err(SessionError::LimitExceeded("path length"));
+    }
+    if bytes.contains(&0) {
+        return Err(SessionError::InvalidPath("NUL".into()));
+    }
+    if bytes[0] != b'/' {
+        return Err(SessionError::InvalidPath("relative".into()));
+    }
+    Ok(())
 }
 
 /// 表示形式。v5 の `Layout` と同じ3種類。
@@ -614,11 +667,11 @@ impl EntryKeyValue {
 
     fn validate(&self) -> Result<(), SessionError> {
         match self {
-            Self::Path { path, .. } => path.validate(),
+            Self::Path { path, .. } => path.validate_for_platform(),
             Self::Archive {
                 source, components, ..
             } => {
-                source.validate()?;
+                source.validate_for_platform()?;
                 validate_archive_components(components)
             }
             Self::Demo { .. } => Ok(()),
@@ -903,14 +956,20 @@ fn estimate_path_value_size(path: &Path) -> Result<usize, SessionError> {
         use std::os::windows::ffi::OsStrExt as _;
         estimate_path_units_size(path.as_os_str().encode_wide())
     }
-    #[cfg(not(windows))]
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        let bytes = path.as_os_str().as_bytes();
+        validate_unix_bytes(bytes)?;
+        estimate_path_units_size(bytes.iter().copied().map(u16::from))
+    }
+    #[cfg(not(any(windows, unix)))]
     {
         let _ = path;
         Err(SessionError::UnsupportedPlatform)
     }
 }
 
-#[cfg(windows)]
 fn estimate_path_units_size(units: impl Iterator<Item = u16>) -> Result<usize, SessionError> {
     let mut count = 0usize;
     let mut encoded = 96usize; // tagged value and array punctuation
@@ -927,7 +986,6 @@ fn estimate_path_units_size(units: impl Iterator<Item = u16>) -> Result<usize, S
     Ok(encoded)
 }
 
-#[cfg(windows)]
 fn decimal_digits(mut value: u16) -> usize {
     let mut digits = 1;
     while value >= 10 {
@@ -937,44 +995,22 @@ fn decimal_digits(mut value: u16) -> usize {
     digits
 }
 
+fn estimate_stored_path_size(path: &PathValue) -> Result<usize, SessionError> {
+    match path {
+        PathValue::WindowsUtf16 { units } => estimate_path_units_size(units.iter().copied()),
+        PathValue::UnixBytes { bytes } => {
+            estimate_path_units_size(bytes.iter().copied().map(u16::from))
+        }
+    }
+}
+
 fn estimate_location_value_size(location: &LocationValue) -> Result<usize, SessionError> {
     location.validate()?;
     match location {
-        LocationValue::Path {
-            path: PathValue::WindowsUtf16 { units },
-        } => {
-            #[cfg(windows)]
-            {
-                estimate_path_units_size(units.iter().copied())
-            }
-            #[cfg(not(windows))]
-            {
-                let _ = units;
-                Err(SessionError::UnsupportedPlatform)
-            }
-        }
-        LocationValue::Archive {
-            source: PathValue::WindowsUtf16 { units },
-            components,
-        } => {
-            validate_archive_components(components)?;
-            #[cfg(windows)]
-            {
-                Ok(estimate_path_units_size(units.iter().copied())?
-                    .saturating_add(64)
-                    .saturating_add(
-                        components
-                            .iter()
-                            .map(|part| estimate_json_string_size(part))
-                            .sum::<usize>(),
-                    ))
-            }
-            #[cfg(not(windows))]
-            {
-                let _ = units;
-                Err(SessionError::UnsupportedPlatform)
-            }
-        }
+        LocationValue::Path { path } => estimate_stored_path_size(path),
+        LocationValue::Archive { source, components } => Ok(estimate_stored_path_size(source)?
+            .saturating_add(64)
+            .saturating_add(estimate_archive_components_size(components))),
         LocationValue::ShellItem {
             parsing_name,
             display_name,
@@ -988,48 +1024,24 @@ fn estimate_location_value_size(location: &LocationValue) -> Result<usize, Sessi
 
 fn estimate_stored_entry_key_size(key: &EntryKeyValue) -> Result<usize, SessionError> {
     match key {
-        EntryKeyValue::Path {
-            path: PathValue::WindowsUtf16 { units },
-            ..
-        } => {
-            #[cfg(windows)]
-            {
-                Ok(estimate_path_units_size(units.iter().copied())?.saturating_add(96))
-            }
-            #[cfg(not(windows))]
-            {
-                let _ = units;
-                Err(SessionError::UnsupportedPlatform)
-            }
-        }
+        EntryKeyValue::Path { path, .. } => Ok(estimate_stored_path_size(path)?.saturating_add(96)),
         EntryKeyValue::Archive {
-            source: PathValue::WindowsUtf16 { units },
-            components,
-            ..
-        } => {
-            validate_archive_components(components)?;
-            #[cfg(windows)]
-            {
-                Ok(estimate_path_units_size(units.iter().copied())?
-                    .saturating_add(96)
-                    .saturating_add(
-                        components
-                            .iter()
-                            .map(|part| estimate_json_string_size(part))
-                            .sum::<usize>(),
-                    ))
-            }
-            #[cfg(not(windows))]
-            {
-                let _ = units;
-                Err(SessionError::UnsupportedPlatform)
-            }
-        }
+            source, components, ..
+        } => Ok(estimate_stored_path_size(source)?
+            .saturating_add(96)
+            .saturating_add(estimate_archive_components_size(components))),
         EntryKeyValue::Demo { .. } => Ok(64),
         EntryKeyValue::Virtual { identity } => {
             Ok(64usize.saturating_add(estimate_json_string_size(identity)))
         }
     }
+}
+
+fn estimate_archive_components_size(components: &[String]) -> usize {
+    components
+        .iter()
+        .map(|part| estimate_json_string_size(part))
+        .sum()
 }
 
 fn estimate_navigation_value_size(
@@ -2250,11 +2262,18 @@ impl<S: SessionSink> OrderedWriter<S> {
 mod tests {
     use super::*;
 
+    fn fixture_path(name: &str) -> PathBuf {
+        #[cfg(unix)]
+        return PathBuf::from(format!("/{}", name.replace('\\', "/")));
+        #[cfg(not(unix))]
+        PathBuf::from(name)
+    }
+
     fn tab(key: u64, name: &str) -> TabSnapshot {
         TabSnapshot {
             key,
             location: LocationValue::Path {
-                path: PathValue::from_path(Path::new(name)).unwrap(),
+                path: PathValue::from_path(&fixture_path(name)).unwrap(),
             },
             layout: LayoutValue::Rows,
             icon_scale: 1.25,
@@ -2312,13 +2331,13 @@ mod tests {
     #[test]
     fn archive_location_and_bookmark_key_round_trip_losslessly() {
         let location = crate::location::Location::Archive {
-            source: PathBuf::from(r"C:\work\bundle.zip"),
+            source: fixture_path(r"C:\work\bundle.zip"),
             components: vec!["nested".into(), "empty".into()],
         };
         let value = LocationValue::from_location(&location).unwrap();
         assert_eq!(value.to_location().unwrap(), location);
         let key = crate::entry_identity::EntryKey::Archive {
-            source: PathBuf::from(r"C:\work\bundle.zip"),
+            source: fixture_path(r"C:\work\bundle.zip"),
             components: vec!["nested".into(), "empty".into()],
             kind: crate::directory::EntryKind::Folder,
         };
@@ -2329,7 +2348,7 @@ mod tests {
     #[test]
     fn schema_ten_migration_preserves_typed_archive_address() {
         let location = crate::location::Location::Archive {
-            source: PathBuf::from(r"C:\work\bundle.zip"),
+            source: fixture_path(r"C:\work\bundle.zip"),
             components: vec!["nested".into()],
         };
         let mut entry = tab(1, r"C:\unused");
@@ -2494,6 +2513,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn a_v1_path_snapshot_migrates_to_a_tagged_location() {
         let v1 = br#"{
             "schema_version": 1,
@@ -2538,11 +2558,12 @@ mod tests {
         };
         value.validate().unwrap();
         let bytes = serde_json::to_vec(&value).unwrap();
+        assert_eq!(
+            bytes,
+            br#"{"encoding":"windows-utf16","units":[67,58,92,97,55296,98]}"#
+        );
         let restored: PathValue = serde_json::from_slice(&bytes).unwrap();
-        let PathValue::WindowsUtf16 { units: restored } = restored;
-        assert_eq!(restored, units);
-        // lossy な文字列に置き換わっていないこと。
-        assert_eq!(restored[4], 0xD800);
+        assert_eq!(restored, PathValue::WindowsUtf16 { units });
     }
 
     #[test]
@@ -2573,7 +2594,7 @@ mod tests {
         // path の長さ。
         let long = format!(r"C:\{}", "a".repeat(MAX_PATH_UNITS));
         assert_eq!(
-            PathValue::from_path(Path::new(&long)),
+            PathValue::from_path(&fixture_path(&long)),
             Err(SessionError::LimitExceeded("path length"))
         );
 
@@ -2617,15 +2638,24 @@ mod tests {
         // drive 絶対と UNC は通る。filesystem の存在は見ない。
         for name in [r"C:\", r"C:\missing\folder", r"\\server\share"] {
             assert!(
-                PathValue::from_path(Path::new(name)).is_ok(),
+                PathValue::WindowsUtf16 {
+                    units: name.encode_utf16().collect()
+                }
+                .validate()
+                .is_ok(),
                 "{name} should be accepted"
             );
         }
         let invalid = snapshot(vec![TabSnapshot {
             key: 1,
             location: LocationValue::Path {
+                #[cfg(not(unix))]
                 path: PathValue::WindowsUtf16 {
                     units: r"relative\path".encode_utf16().collect(),
+                },
+                #[cfg(unix)]
+                path: PathValue::UnixBytes {
+                    bytes: b"relative/path".to_vec(),
                 },
             },
             layout: LayoutValue::Rows,
@@ -2680,8 +2710,113 @@ mod tests {
             Err(SessionError::Malformed(_))
         ));
         // 未知の encoding は構造として拒否する。別 OS の path を解釈しない。
-        let unknown = br#"{"encoding":"unix-bytes","units":[1]}"#;
+        let unknown = br#"{"encoding":"unknown","units":[1]}"#;
         assert!(serde_json::from_slice::<PathValue>(unknown).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_unix_session_round_trips_a_non_utf8_path() {
+        use crate::navigation_history::{HistoryEntry, NavigationHistorySnapshot, ViewBookmark};
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let raw = b"/work/\xff\xfe";
+        let path = Path::new(std::ffi::OsStr::from_bytes(raw));
+        let mut tab = tab(1, r"C:\work");
+        tab.location = LocationValue::Path {
+            path: PathValue::from_path(path).unwrap(),
+        };
+        let navigation = NavigationHistorySnapshot {
+            cursor: 0,
+            entries: vec![HistoryEntry {
+                location: crate::location::Location::Path(path.into()),
+                bookmark: Some(ViewBookmark {
+                    key: crate::entry_identity::EntryKey::Path {
+                        path: path.join("entry"),
+                        kind: crate::directory::EntryKind::File,
+                    },
+                    offset: 0.0,
+                    selection: Default::default(),
+                }),
+            }],
+        };
+        let mut closed_tab = tab.clone();
+        closed_tab.key = 2;
+        let mut saved = snapshot(vec![tab]);
+        saved.tab_id_high_water = closed_tab.key;
+        saved.window.as_mut().unwrap().closed_tabs =
+            vec![ClosedTabSnapshot::from_parts(closed_tab, 0, true, &navigation).unwrap()];
+
+        let bytes = saved.to_json().unwrap();
+        let restored = SessionSnapshot::from_json(&bytes).unwrap();
+        let location = &restored.workspaces[0].panes[0].tabs[0].location;
+        assert_eq!(
+            location.to_location().unwrap(),
+            crate::location::Location::Path(path.into())
+        );
+        assert_eq!(
+            location,
+            &LocationValue::Path {
+                path: PathValue::UnixBytes {
+                    bytes: raw.to_vec()
+                }
+            }
+        );
+        assert_eq!(
+            restored.window.as_ref().unwrap().closed_tabs[0]
+                .navigation_snapshot()
+                .unwrap(),
+            navigation
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_windows_session_is_ignored_with_a_notice_on_unix() {
+        let foreign: PathValue = serde_json::from_slice(
+            br#"{"encoding":"windows-utf16","units":[67,58,92,119,111,114,107]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            foreign.to_path_buf(),
+            Err(SessionError::UnsupportedPlatform)
+        );
+
+        let mut tab = tab(1, r"C:\work");
+        let native_backup = snapshot(vec![tab.clone()]).to_json().unwrap();
+        tab.location = LocationValue::Path { path: foreign };
+        let data = serde_json::to_vec(&snapshot(vec![tab])).unwrap();
+        assert_eq!(
+            SessionSnapshot::from_json(&data),
+            Err(SessionError::UnsupportedPlatform)
+        );
+        assert_eq!(
+            resolve_restore(Some(&data), Some(&native_backup)),
+            RestoreOutcome::Unreadable(SessionError::UnsupportedPlatform.to_string()),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_truncated_primary_restores_the_backup_and_ignores_stray_temps() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = SessionFile::new(SessionPaths::new(directory.path().join("session.json")));
+        let old = snapshot(vec![tab(1, r"C:\previous")]);
+        let new = snapshot(vec![tab(2, r"C:\current")]);
+        file.replace(&old.to_json().unwrap()).unwrap();
+        file.replace(&new.to_json().unwrap()).unwrap();
+        let stray = directory.path().join(".session-interrupted.tmp");
+        std::fs::write(&stray, b"unpublished data").unwrap();
+        std::fs::write(&file.paths().primary, b"{\"schema_version\":").unwrap();
+
+        let reopened = SessionFile::new(file.paths().clone());
+        let primary = reopened.read_primary().unwrap();
+        let backup = reopened.read_backup().unwrap();
+        assert_eq!(
+            resolve_restore(primary.as_deref(), backup.as_deref()),
+            RestoreOutcome::Restored(Box::new(old)),
+        );
+        assert_eq!(std::fs::read(stray).unwrap(), b"unpublished data");
     }
 
     #[derive(Default)]

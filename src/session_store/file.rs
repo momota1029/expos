@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 /// 保存先の組。同じ directory に置き、別 volume をまたぐ置換をしない。
 #[derive(Clone, Debug)]
-#[cfg_attr(not(windows), allow(dead_code))] // 非対応 backend はこれらのパスで I/O しない。
+#[cfg_attr(not(any(windows, unix)), allow(dead_code))] // 非対応 backend は I/O しない。
 pub(crate) struct SessionPaths {
     pub primary: PathBuf,
     pub backup: PathBuf,
@@ -32,31 +32,36 @@ impl SessionPaths {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum WriteFailure {
     /// 一時ファイルの作成・書き込み・flush。
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     Temporary(String),
     /// platform の置換。primary は変わっていない。
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     Replace { code: Option<u32>, message: String },
     /// 一時ファイルを片付けられなかった。
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     Cleanup(String),
-    #[cfg(not(windows))]
+    /// Linux では rename が済んでいても、directory の同期失敗は耐久成功にしない。
+    #[cfg(unix)]
+    SyncDirectory(String),
+    #[cfg(not(any(windows, unix)))]
     Unsupported,
 }
 
 impl std::fmt::Display for WriteFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            #[cfg(windows)]
+            #[cfg(any(windows, unix))]
             Self::Temporary(reason) => write!(f, "temporary file: {reason}"),
-            #[cfg(windows)]
+            #[cfg(any(windows, unix))]
             Self::Replace { code, message } => match code {
                 Some(code) => write!(f, "replace failed ({code}): {message}"),
                 None => write!(f, "replace failed: {message}"),
             },
-            #[cfg(windows)]
+            #[cfg(any(windows, unix))]
             Self::Cleanup(reason) => write!(f, "cleanup: {reason}"),
-            #[cfg(not(windows))]
+            #[cfg(unix)]
+            Self::SyncDirectory(reason) => write!(f, "directory sync: {reason}"),
+            #[cfg(not(any(windows, unix)))]
             Self::Unsupported => write!(f, "durable file writes are unsupported on this platform"),
         }
     }

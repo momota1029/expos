@@ -23119,6 +23119,177 @@ fn prepublish_partial_move_receipt_reports_unpublished_stage() {
     );
 }
 
+#[cfg(all(unix, target_os = "linux"))]
+mod linux_rename_tests {
+    use super::*;
+
+    fn capture_rename(source: &Path, destination: &Path) -> ExecutorCommand {
+        let listing = crate::directory::enumerate(source.parent().unwrap().to_path_buf()).unwrap();
+        let source_identity = listing
+            .entries
+            .iter()
+            .find(|entry| entry.path.as_deref() == Some(source))
+            .and_then(|entry| entry.source_identity.as_ref())
+            .unwrap()
+            .filesystem_identity();
+        let mut runtime =
+            crate::operations::runtime::OperationRuntime::new(OperationService::default());
+        runtime
+            .submit(OperationRequest {
+                kind: OperationKind::Rename,
+                virtual_source: None,
+                sources: vec![source.to_path_buf()],
+                destination: Some(destination.to_path_buf()),
+                move_identity_guard: Some(crate::operations::model::MoveIdentityGuard {
+                    source_identities: vec![source_identity],
+                    destination_identity: listing.directory_identity.unwrap(),
+                }),
+                clipboard_move_source_evidence: None,
+                rename_reparse_guard: None,
+                move_destination_identity_guard: None,
+                move_replace_source_evidence: None,
+                trash_source_guards: None,
+                source_cleanup_identity_guard: None,
+                initial_conflict_policy: None,
+                copy_destination_identity_guard: None,
+                create_parent_directory_identity_guard: None,
+                zip_create_guard: None,
+                shortcut_create_guard: None,
+                seven_zip_create_guard: None,
+                seven_zip_extract_guard: None,
+                origin: None,
+                batch_rename_plan: None,
+            })
+            .unwrap();
+        runtime.start_next().unwrap().command
+    }
+
+    fn run_rename(command: ExecutorCommand) -> TerminalReport {
+        let (_control, controls) = std::sync::mpsc::channel();
+        let mut terminal = None;
+        execute_prepare(
+            command,
+            &AtomicBool::new(false),
+            &controls,
+            |fact| match fact {
+                ExecutorFact::Terminal { report, .. } => terminal = Some(report),
+                ExecutorFact::Progress { .. } => {}
+                _ => panic!(
+                    "ordinary Linux Rename must not require journal, conflict, or Undo facts"
+                ),
+            },
+        );
+        terminal.unwrap()
+    }
+
+    #[test]
+    fn renames_file_and_case_only_then_refreshes_its_parent() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("before.txt");
+        let destination = root.path().join("after.txt");
+        std::fs::write(&source, b"payload").unwrap();
+
+        let report = run_rename(capture_rename(&source, &destination));
+        assert_eq!(report.outcome, TerminalOutcome::Succeeded);
+        assert_eq!(report.change_hints.len(), 1);
+        assert_eq!(report.change_hints[0].directory, root.path());
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(&destination).unwrap(), b"payload");
+
+        let upper_case = root.path().join("After.txt");
+        let report = run_rename(capture_rename(&destination, &upper_case));
+        assert_eq!(report.outcome, TerminalOutcome::Succeeded);
+        assert_eq!(std::fs::read(&upper_case).unwrap(), b"payload");
+        assert!(!destination.exists());
+    }
+
+    #[test]
+    fn renames_directory_with_its_contents() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("before");
+        let destination = root.path().join("after");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("child.txt"), b"child").unwrap();
+
+        let report = run_rename(capture_rename(&source, &destination));
+        assert_eq!(report.outcome, TerminalOutcome::Succeeded);
+        assert!(!source.exists());
+        assert_eq!(
+            std::fs::read(destination.join("child.txt")).unwrap(),
+            b"child"
+        );
+    }
+
+    #[test]
+    fn late_destination_collision_leaves_both_files_intact() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("before");
+        let destination = root.path().join("after");
+        std::fs::write(&source, b"source").unwrap();
+        let command = capture_rename(&source, &destination);
+        std::fs::write(&destination, b"collision").unwrap();
+
+        let report = run_rename(command);
+        assert_eq!(report.outcome, TerminalOutcome::Failed);
+        assert_eq!(
+            report.receipts[0].detail.as_deref(),
+            Some("DestinationExists")
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), b"source");
+        assert_eq!(std::fs::read(&destination).unwrap(), b"collision");
+    }
+
+    #[test]
+    fn source_replaced_after_capture_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("before");
+        let destination = root.path().join("after");
+        let original = root.path().join("original");
+        std::fs::write(&source, b"original").unwrap();
+        let command = capture_rename(&source, &destination);
+        std::fs::rename(&source, &original).unwrap();
+        std::fs::write(&source, b"replacement").unwrap();
+
+        let report = run_rename(command);
+        assert_eq!(report.outcome, TerminalOutcome::Failed);
+        assert_eq!(
+            report.receipts[0].detail.as_deref(),
+            Some("GuardRejected(\"IdentityMismatch\")")
+        );
+        assert!(!destination.exists());
+        assert_eq!(std::fs::read(&source).unwrap(), b"replacement");
+        assert_eq!(std::fs::read(&original).unwrap(), b"original");
+    }
+
+    #[test]
+    fn renames_a_non_utf8_source_to_editor_text() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join(OsStr::from_bytes(b"before-\xff"));
+        let destination = root.path().join("after");
+        std::fs::write(&source, b"payload").unwrap();
+
+        let report = run_rename(capture_rename(&source, &destination));
+        assert_eq!(report.outcome, TerminalOutcome::Succeeded);
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(&destination).unwrap(), b"payload");
+    }
+
+    #[test]
+    fn rejects_invalid_target_names() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("before");
+        std::fs::write(&source, b"payload").unwrap();
+        for name in ["trailing/", "nested/leaf", "null\0byte", "CON"] {
+            let report = run_rename(capture_rename(&source, &root.path().join(name)));
+            assert_eq!(report.outcome, TerminalOutcome::Failed, "{name:?}");
+        }
+        assert_eq!(std::fs::read(&source).unwrap(), b"payload");
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+}
+
 #[cfg(target_os = "windows")]
 #[test]
 fn rename_worker_uses_the_captured_sibling_and_refreshes_its_parent() {

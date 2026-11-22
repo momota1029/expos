@@ -1622,6 +1622,7 @@ dependencies = [
  "kamadak-exif",
  "notify",
  "raw-window-handle",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",
@@ -5557,6 +5558,7 @@ version = "5.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a9b93a14fcf658568eb11b3ac4cb406822e916e2c55cdebc421beeb0bd7c94d8"
 dependencies = [
+ "chrono",
  "libc",
  "log",
  "objc2",

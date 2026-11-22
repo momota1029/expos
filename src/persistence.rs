@@ -1,6 +1,6 @@
 //! タブ構成と window 状態の保存・復元。生きているタブと disk をつなぐ。
 //!
-//! `session_store` は形式（DTO / 検証 / 順序付き writer / Windows の置換）だけを知る。
+//! `session_store` は形式（DTO / 検証 / 順序付き writer / OS ごとの置換）だけを知る。
 //! ここは「何をいつ書くか」を持ち、GPUI の view から呼ばれる唯一の層。
 //! 生きているタブの owner は `FilerShell` のまま。snapshot は保存用の detached value で、
 //! 復元のあとも第二の application model として残さない。
@@ -81,7 +81,10 @@ impl gpui::Global for SessionAutosaveOwner {}
 
 impl SessionAutosaveOwner {
     pub(super) fn disabled() -> Self {
-        Self::default()
+        Self {
+            writes_disabled: true,
+            ..Self::default()
+        }
     }
 
     fn from_autosave(autosave: Option<Autosave>, restore: Option<&SessionSnapshot>) -> Self {
@@ -1030,6 +1033,10 @@ mod tests {
     }
 
     fn snapshot(name: &str) -> SessionSnapshot {
+        #[cfg(unix)]
+        let name = format!("/{}", name.replace('\\', "/"));
+        #[cfg(unix)]
+        let name = name.as_str();
         let window = session_store::WindowSessionSnapshot {
             id: 1,
             workspaces: vec![session_store::WorkspaceSnapshot {
@@ -1170,7 +1177,10 @@ mod tests {
     #[test]
     fn a_disabled_startup_saves_nothing() {
         let startup = Startup::disabled();
-        assert!(!SessionAutosaveOwner::disabled().has_writer());
+        let mut owner = SessionAutosaveOwner::disabled();
+        assert!(!owner.has_writer());
+        assert!(owner.reopen().is_some());
+        assert!(!owner.has_writer());
         assert!(startup.restore.is_none());
         assert!(startup.notice.is_none());
     }

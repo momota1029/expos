@@ -7,6 +7,18 @@
 pub struct FilesystemIdentity(String);
 
 impl FilesystemIdentity {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn from_linux_parts(device: u64, inode: u64) -> Self {
+        Self(format!("linux:{device:016x}:{inode:016x}"))
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn from_linux_metadata(metadata: &std::fs::Metadata) -> Self {
+        use std::os::unix::fs::MetadataExt;
+
+        Self::from_linux_parts(metadata.dev(), metadata.ino())
+    }
+
     pub(crate) fn from_windows_parts(volume_serial: u32, file_index: u64) -> Self {
         Self(format!("{:08x}:{file_index:016x}", volume_serial))
     }

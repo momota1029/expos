@@ -329,7 +329,11 @@ impl Snapshot {
                 .path
                 .validate()
                 .map_err(|error| LoadError::Unreadable(error.to_string()))?;
-            let PathValue::WindowsUtf16 { units } = record.path;
+            let PathValue::WindowsUtf16 { units } = record.path else {
+                return Err(LoadError::Unreadable(
+                    "unsupported folder path encoding".into(),
+                ));
+            };
             estimated_bytes = estimated_bytes.saturating_add(
                 units
                     .len()

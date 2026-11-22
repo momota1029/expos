@@ -1,7 +1,7 @@
-//! Windows rename capability gate.
+//! Platform adapters for renaming a single sibling entry.
 //!
 //! This adapter deliberately accepts one parent-fixed name component only.  A
-//! future inline editor submits a detached request here; it must not use a
+//! detached request from the inline editor arrives here; it must not use a
 //! display row or turn a rename into a shell command line.
 
 use std::path::{Path, PathBuf};
@@ -79,7 +79,18 @@ pub(crate) fn rename_sibling_guarded(
             cancelled,
         )
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        linux::rename_sibling(
+            source,
+            parent,
+            destination,
+            expected_source,
+            expected_parent,
+            cancelled,
+        )
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = (
             source,
@@ -442,6 +453,91 @@ pub(crate) fn is_case_only_rename(source: &Path, new_name: &str) -> bool {
 }
 
 pub(crate) use crate::windows_name::is_single_name;
+
+#[cfg(target_os = "linux")]
+mod linux {
+    use super::{RenameError, is_single_name};
+    use crate::filesystem_identity::FilesystemIdentity;
+    use rustix::{
+        fs::{self, AtFlags, FileType, Mode, OFlags, RenameFlags},
+        io::Errno,
+    };
+    use std::{
+        path::Path,
+        sync::atomic::{AtomicBool, Ordering},
+    };
+
+    pub(super) fn rename_sibling(
+        source: &Path,
+        parent: &Path,
+        destination: &Path,
+        expected_source: &FilesystemIdentity,
+        expected_parent: &FilesystemIdentity,
+        cancelled: &AtomicBool,
+    ) -> Result<(), RenameError> {
+        let source_name = source.file_name().ok_or(RenameError::InvalidName)?;
+        let destination_name = destination
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| is_single_name(name))
+            .ok_or(RenameError::InvalidName)?;
+        // file_name() は末尾の区切りを捨てるので、元の path も照合する。
+        if destination.as_os_str() != parent.join(destination_name).as_os_str() {
+            return Err(RenameError::InvalidName);
+        }
+
+        let directory = fs::open(parent, OFlags::PATH | OFlags::DIRECTORY, Mode::empty())
+            .map_err(rename_error)?;
+        let parent_stat = fs::fstat(&directory).map_err(rename_error)?;
+        if FilesystemIdentity::from_linux_parts(
+            parent_stat.st_dev as u64,
+            parent_stat.st_ino as u64,
+        ) != *expected_parent
+        {
+            return Err(RenameError::IdentityMismatch);
+        }
+        let source_stat =
+            fs::statat(&directory, source_name, AtFlags::SYMLINK_NOFOLLOW).map_err(rename_error)?;
+        if FilesystemIdentity::from_linux_parts(
+            source_stat.st_dev as u64,
+            source_stat.st_ino as u64,
+        ) != *expected_source
+        {
+            return Err(RenameError::IdentityMismatch);
+        }
+        match FileType::from_raw_mode(source_stat.st_mode) {
+            FileType::RegularFile | FileType::Directory => {}
+            FileType::Symlink => return Err(RenameError::ReparsePoint),
+            _ => return Err(RenameError::Unsupported),
+        }
+        if cancelled.load(Ordering::Acquire) {
+            return Err(RenameError::Cancelled);
+        }
+        if source_name == destination_name {
+            return Ok(());
+        }
+        // Linux は source の inode 照合を rename と同じ syscall では行えない。
+        // 親を fd に固定し、上の no-follow 照合の直後に上書き不可で rename する。
+        fs::renameat_with(
+            &directory,
+            source_name,
+            &directory,
+            destination_name,
+            RenameFlags::NOREPLACE,
+        )
+        .map_err(rename_error)
+    }
+
+    fn rename_error(error: Errno) -> RenameError {
+        match error {
+            Errno::EXIST | Errno::NOTEMPTY => RenameError::DestinationExists,
+            Errno::NOENT | Errno::NOTDIR | Errno::STALE => RenameError::IdentityMismatch,
+            Errno::NOSYS | Errno::OPNOTSUPP | Errno::INVAL => RenameError::Unsupported,
+            Errno::XDEV => RenameError::CrossVolume,
+            _ => RenameError::Io(std::io::Error::from(error).to_string()),
+        }
+    }
+}
 
 #[cfg(target_os = "windows")]
 mod windows {

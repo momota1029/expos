@@ -1022,6 +1022,11 @@ fn pane_drop_zone(
     None
 }
 
+#[cfg(not(windows))]
+fn is_inline_rename_name(name: &str) -> bool {
+    !matches!(name, "" | "." | "..") && !name.contains(['/', '\0'])
+}
+
 fn directory_event_allowed_during_batch_rename(
     event: &DirectoryEvent,
     batch_rename_active: bool,
@@ -6094,6 +6099,11 @@ impl FilerShell {
             return;
         };
         if !current || new_name.is_empty() {
+            self.reject_rename_geometry(view_id, attempt_ticket, cx);
+            return;
+        }
+        #[cfg(not(windows))]
+        if !is_inline_rename_name(&new_name) {
             self.reject_rename_geometry(view_id, attempt_ticket, cx);
             return;
         }
@@ -12623,6 +12633,14 @@ impl FilerShell {
         if !session_store::SessionFile::WRITES_SUPPORTED {
             return Ok(None);
         }
+        // Linux の headless 起動や形式違いで writer が無効なときは capture も省く。
+        #[cfg(target_os = "linux")]
+        if !cx
+            .try_global::<persistence::SessionAutosaveOwner>()
+            .is_some_and(persistence::SessionAutosaveOwner::has_writer)
+        {
+            return Ok(None);
+        }
         let Some(mut aggregate) = self.capture_local(window, clean_shutdown, cx)? else {
             return Ok(None);
         };
@@ -12876,6 +12894,13 @@ impl FilerShell {
         cx: &mut Context<Self>,
     ) -> Result<Option<SessionSnapshot>, String> {
         if !session_store::SessionFile::WRITES_SUPPORTED {
+            return Ok(None);
+        }
+        #[cfg(target_os = "linux")]
+        if !cx
+            .try_global::<persistence::SessionAutosaveOwner>()
+            .is_some_and(persistence::SessionAutosaveOwner::has_writer)
+        {
             return Ok(None);
         }
         let registrations =
@@ -13371,12 +13396,25 @@ impl FilerShell {
                 return true;
             }
         }
-        if let Some(id) = session_ticket {
+        let session_publish_failure: Option<String> = if let Some(id) = session_ticket {
             let result = cx
                 .global_mut::<persistence::SessionAutosaveOwner>()
                 .poll_close(id);
             match result {
                 None => return true,
+                // Linux では session の保存先が壊れていても閉じられるようにする。
+                // 別の失敗を補償中の ticket は、元の保護手順を続ける。
+                #[cfg(target_os = "linux")]
+                Some(Err(reason))
+                    if folder_failure.is_none()
+                        && !session_rollback
+                        && self
+                            .close_intent
+                            .as_ref()
+                            .is_some_and(|intent| intent.session_failure.is_none()) =>
+                {
+                    Some(reason)
+                }
                 Some(Err(reason)) => {
                     if folder_failure.is_some() || session_rollback {
                         self.queue_session_close_rollback(id, reason, cx);
@@ -13385,8 +13423,14 @@ impl FilerShell {
                     self.fail_close_session(id, reason, window, cx);
                     return false;
                 }
-                Some(Ok(_)) => {}
+                Some(Ok(_)) => None,
             }
+        } else {
+            None
+        };
+        if let Some(id) = session_ticket
+            && session_publish_failure.is_none()
+        {
             if let Some(error) = folder_failure {
                 if session_rollback {
                     self.fail_close_folder(error, window, cx);
@@ -13485,6 +13529,9 @@ impl FilerShell {
         if let Some(id) = session_ticket {
             cx.global_mut::<persistence::SessionAutosaveOwner>()
                 .finish_close(id, None);
+        }
+        if let Some(reason) = session_publish_failure {
+            eprintln!("[v6][session] close save failed: {reason}");
         }
         cx.global_mut::<window_coordinator::WindowCoordinator>()
             .unregister(window_id, incarnation);
@@ -18239,6 +18286,17 @@ mod tests {
         ColumnValue, LayoutValue, LocationValue, PathValue, SCHEMA_VERSION, SortValue, TabSnapshot,
     };
     use std::path::{Path, PathBuf};
+
+    #[cfg(not(windows))]
+    #[test]
+    fn inline_rename_rejects_non_leaf_names_on_linux() {
+        for name in ["", ".", "..", "/tmp/x", "a/b", "a/", "a\0b"] {
+            assert!(!is_inline_rename_name(name), "{name:?}");
+        }
+        for name in ["report.txt", "a:b", "a\\b", "name.", "name ", "CON"] {
+            assert!(is_inline_rename_name(name), "{name:?}");
+        }
+    }
 
     #[cfg(windows)]
     #[test]

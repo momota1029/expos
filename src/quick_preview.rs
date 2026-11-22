@@ -1457,7 +1457,7 @@ async fn decode_image(target: Target) -> Option<Decoded> {
     #[cfg(target_os = "linux")]
     let (mut pin, source, identity) = {
         let identity = expected.filesystem_identity();
-        let opened = open_linux_preview_file(&target.path, &identity);
+        let opened = open_linux_preview_file(&target.path, expected);
         if crate::thumbnails::epoch_of(&target.path) != target.epoch {
             return None;
         }
@@ -1548,7 +1548,7 @@ async fn decode_image(_target: Target) -> Option<Decoded> {
 #[cfg(target_os = "linux")]
 fn open_linux_preview_file(
     path: &Path,
-    expected: &FilesystemIdentity,
+    expected: &EntrySourceIdentity,
 ) -> Result<(std::fs::File, SourceStamp), ()> {
     use std::os::unix::fs::OpenOptionsExt;
 
@@ -1564,13 +1564,7 @@ fn open_linux_preview_file(
     };
 
     let metadata = std::fs::symlink_metadata(path).map_err(|_| ())?;
-    // 列挙時の EntrySourceIdentity は更新時刻と長さだけなので、open 後は inode も照合する。
-    let observed = FilesystemIdentity::from_fallback_token(format!(
-        "{:?}:{}",
-        metadata.modified().ok(),
-        metadata.len()
-    ));
-    if !metadata.is_file() || observed != *expected {
+    if !expected.matches_linux_preview_metadata(&metadata) {
         return Err(());
     }
     let source = SourceStamp::from_metadata(&metadata);
@@ -1632,16 +1626,15 @@ fn read_text_preview(target: &Target) -> Result<TextPreview, ()> {
         .source_identity
         .as_ref()
         .filter(|identity| identity.kind == crate::directory::EntryKind::File)
-        .map(EntrySourceIdentity::filesystem_identity)
         .ok_or(())?;
     #[cfg(not(target_os = "linux"))]
     let (mut file, before_stamp) = {
-        let file = open_text_file(&target.path, &expected)?;
+        let file = open_text_file(&target.path, &expected.filesystem_identity())?;
         let before = file.metadata().map_err(|_| ())?;
         (file, SourceStamp::from_metadata(&before))
     };
     #[cfg(target_os = "linux")]
-    let (mut file, before_stamp) = open_linux_preview_file(&target.path, &expected)?;
+    let (mut file, before_stamp) = open_linux_preview_file(&target.path, expected)?;
     let mut bytes = Vec::with_capacity(TEXT_READ_LIMIT + 1);
     file.by_ref()
         .take((TEXT_READ_LIMIT + 1) as u64)
@@ -1789,13 +1782,12 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn linux_preview_rejects_replacement_with_same_listing_token() {
+    fn linux_preview_rejects_replacement_with_same_size_and_mtime() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("preview.txt");
         std::fs::write(&path, b"old").unwrap();
         let expected = EntrySourceIdentity::from_path_no_follow(&path, EntryKind::File).unwrap();
-        let (file, before) =
-            open_linux_preview_file(&path, &expected.filesystem_identity()).unwrap();
+        let (file, before) = open_linux_preview_file(&path, &expected).unwrap();
         assert!(linux_preview_source_is_current(&path, &file, &before));
 
         let mut request = target(path.to_str().unwrap(), 1);
@@ -1810,7 +1802,8 @@ mod tests {
             .set_times(std::fs::FileTimes::new().set_modified(modified))
             .unwrap();
         std::fs::rename(&replacement, &path).unwrap();
-        assert!(expected.matches_path(&path));
+        assert!(!expected.matches_path(&path));
+        assert!(open_linux_preview_file(&path, &expected).is_err());
         assert!(!linux_preview_source_is_current(&path, &file, &before));
     }
 

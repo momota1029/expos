@@ -45,6 +45,8 @@ fn link_kind(metadata: &std::fs::Metadata) -> Option<LinkKind> {
 pub struct EntrySourceIdentity {
     pub kind: EntryKind,
     identity: crate::filesystem_identity::FilesystemIdentity,
+    #[cfg(target_os = "linux")]
+    linux_listing_stamp: (Option<SystemTime>, u64),
 }
 
 impl EntrySourceIdentity {
@@ -52,33 +54,48 @@ impl EntrySourceIdentity {
     /// 続ける。path text だけで外部 index 結果を再利用するより安全だからである。
     pub fn from_path(path: &Path, kind: EntryKind) -> Option<Self> {
         #[cfg(target_os = "windows")]
-        let identity = windows_source_identity(path, false)?;
+        {
+            let identity = windows_source_identity(path, false)?;
+            Some(Self { kind, identity })
+        }
         #[cfg(not(target_os = "windows"))]
-        let identity = {
-            let metadata = std::fs::symlink_metadata(path).ok()?;
-            crate::filesystem_identity::FilesystemIdentity::from_fallback_token(format!(
-                "{:?}:{}",
-                metadata.modified().ok(),
-                metadata.len()
-            ))
-        };
-        Some(Self { kind, identity })
+        Self::from_path_no_follow(path, kind)
     }
 
     /// Capture the directory entry itself, including a reparse point rather than its target.
     pub fn from_path_no_follow(path: &Path, kind: EntryKind) -> Option<Self> {
         #[cfg(target_os = "windows")]
-        let identity = windows_source_identity(path, true)?;
-        #[cfg(not(target_os = "windows"))]
-        let identity = {
+        {
+            let identity = windows_source_identity(path, true)?;
+            Some(Self { kind, identity })
+        }
+        #[cfg(target_os = "linux")]
+        {
             let metadata = std::fs::symlink_metadata(path).ok()?;
-            crate::filesystem_identity::FilesystemIdentity::from_fallback_token(format!(
-                "{:?}:{}",
-                metadata.modified().ok(),
-                metadata.len()
-            ))
-        };
-        Some(Self { kind, identity })
+            Some(Self::from_linux_metadata(&metadata, kind))
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        {
+            let metadata = std::fs::symlink_metadata(path).ok()?;
+            let identity = crate::filesystem_identity::FilesystemIdentity::from_fallback_token(
+                format!("{:?}:{}", metadata.modified().ok(), metadata.len()),
+            );
+            Some(Self { kind, identity })
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn from_linux_metadata(metadata: &std::fs::Metadata, kind: EntryKind) -> Self {
+        Self {
+            kind,
+            identity: crate::filesystem_identity::FilesystemIdentity::from_linux_metadata(metadata),
+            linux_listing_stamp: (metadata.modified().ok(), metadata.len()),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn matches_linux_preview_metadata(&self, metadata: &std::fs::Metadata) -> bool {
+        metadata.is_file() && *self == Self::from_linux_metadata(metadata, EntryKind::File)
     }
 
     pub(crate) fn filesystem_identity(&self) -> crate::filesystem_identity::FilesystemIdentity {
@@ -98,6 +115,8 @@ impl EntrySourceIdentity {
             identity: crate::filesystem_identity::FilesystemIdentity::from_helper_transport_parts(
                 volume, index,
             ),
+            #[cfg(target_os = "linux")]
+            linux_listing_stamp: (None, 0),
         }
     }
 
@@ -142,6 +161,8 @@ impl EntrySourceIdentity {
             identity: crate::filesystem_identity::FilesystemIdentity::from_fallback_token(
                 token.into(),
             ),
+            #[cfg(target_os = "linux")]
+            linux_listing_stamp: (None, 0),
         }
     }
 }
@@ -250,7 +271,9 @@ fn read_directory_with_identity(
 )> {
     #[cfg(windows)]
     let (route, directory_identity) = windows_directory_route(path);
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    let directory_identity = linux_directory_identity(path);
+    #[cfg(not(any(windows, target_os = "linux")))]
     let directory_identity = None;
 
     let mut entries = Vec::new();
@@ -287,6 +310,12 @@ fn read_directory_with_identity(
         };
         // EntrySourceIdentity は no-follow handle から link object 自身を記録する。
         // これは観測事実であり、mutation は各 operation の no-follow adapter が別途検証する。
+        #[cfg(target_os = "linux")]
+        let source_identity = Some(EntrySourceIdentity::from_linux_metadata(
+            &link_metadata,
+            kind,
+        ));
+        #[cfg(not(target_os = "linux"))]
         let source_identity = EntrySourceIdentity::from_path_no_follow(&item_path, kind);
         entries.push(Entry {
             key: crate::entry_identity::EntryKey::path(item_path.clone(), kind),
@@ -313,7 +342,18 @@ fn read_directory_with_identity(
     });
     #[cfg(windows)]
     drop(route);
+    #[cfg(target_os = "linux")]
+    let directory_identity = directory_identity
+        .filter(|identity| linux_directory_identity(path).as_ref() == Some(identity));
     Ok((entries, directory_identity))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_directory_identity(path: &Path) -> Option<crate::filesystem_identity::FilesystemIdentity> {
+    let metadata = std::fs::metadata(path).ok()?;
+    metadata
+        .is_dir()
+        .then(|| crate::filesystem_identity::FilesystemIdentity::from_linux_metadata(&metadata))
 }
 
 #[cfg(windows)]

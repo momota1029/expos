@@ -673,6 +673,7 @@ impl FilerShell {
                 OperationKind::CreateFolder => "Creating folder…",
                 OperationKind::CreateFile => "Creating file…",
                 OperationKind::CreateShortcut => "Creating shortcut…",
+                OperationKind::Trash if cfg!(target_os = "linux") => "Moving to Trash…",
                 OperationKind::Trash => "Moving to Recycle Bin…",
                 OperationKind::Rename => "Renaming…",
                 OperationKind::BatchRename => "Renaming items…",
@@ -1163,6 +1164,7 @@ impl FilerShell {
                     OperationKind::CreateFolder => "Creating folder…",
                     OperationKind::CreateFile => "Creating file…",
                     OperationKind::CreateShortcut => "Creating shortcut…",
+                    OperationKind::Trash if cfg!(target_os = "linux") => "Moving to Trash…",
                     OperationKind::Trash => "Moving to Recycle Bin…",
                     OperationKind::Rename => "Renaming…",
                     OperationKind::BatchRename => "Renaming items…",
@@ -1221,6 +1223,23 @@ impl FilerShell {
                     }
                 },
             );
+            #[cfg(target_os = "linux")]
+            let detail = if job.request.kind == OperationKind::Trash
+                && let Some(report) = &attempt.terminal
+            {
+                let mut uncertain = report.receipts.iter().filter(|receipt| {
+                    receipt.outcome == operations::model::ItemOutcome::Unknown
+                });
+                match uncertain.next().and_then(|receipt| receipt.detail.as_deref()) {
+                    Some(first) => match uncertain.count() {
+                        0 => first.to_owned(),
+                        remaining => format!("{first} Unconfirmed receipts for {remaining} other items."),
+                    },
+                    None => detail,
+                }
+            } else {
+                detail
+            };
             let inspection_state = if job.request.kind == OperationKind::Move
                 && attempt.state == AttemptState::Terminal
             {

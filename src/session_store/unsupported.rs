@@ -1,4 +1,4 @@
-//! Non-Windows session and journal storage is non-durable for this port milestone.
+//! Session storage fallback for targets without a Windows or Unix backend.
 //! Reads behave like a first run. Writes fail before touching the filesystem.
 
 use super::SessionPaths;

@@ -1362,7 +1362,7 @@ fn execute_prepare_inner_with_lease_and_provider(
                         })
                 })
         });
-        if !valid {
+        if !valid || cfg!(target_os = "linux") {
             emit(ExecutorFact::Terminal {
                 token,
                 report: rejected(),
@@ -1663,7 +1663,9 @@ fn execute_prepare_inner_with_lease_and_provider(
         return;
     }
     #[cfg(not(windows))]
-    if (request.kind == OperationKind::Rename && request.move_identity_guard.is_some())
+    if (cfg!(not(target_os = "linux"))
+        && request.kind == OperationKind::Rename
+        && request.move_identity_guard.is_some())
         || request.move_destination_identity_guard.is_some()
     {
         emit(ExecutorFact::Terminal {
@@ -3476,6 +3478,34 @@ fn execute_prepare_inner_with_lease_and_provider(
             OperationKind::Create7z => unreachable!("handled before item execution"),
             OperationKind::ExtractZip => unreachable!("handled before item execution"),
             OperationKind::Extract7z => unreachable!("handled before item execution"),
+            #[cfg(target_os = "linux")]
+            OperationKind::Rename => {
+                use super::rename::RenameError;
+
+                let destination = destination_path.as_ref().expect("rename has target");
+                match request.move_identity_guard.as_ref() {
+                    Some(guard) if request.rename_reparse_guard.is_none() => {
+                        super::rename::rename_sibling_guarded(
+                            source,
+                            destination,
+                            &guard.source_identities[0],
+                            &guard.destination_identity,
+                            cancelled,
+                        )
+                        .map_err(|error| match error {
+                            RenameError::Cancelled => CopyError::Cancelled,
+                            RenameError::DestinationExists => CopyError::DestinationExists,
+                            RenameError::Unsupported => CopyError::Unsupported,
+                            RenameError::Io(detail) => CopyError::Io(detail),
+                            error => CopyError::GuardRejected(format!("{error:?}")),
+                        })
+                    }
+                    _ => Err(CopyError::GuardRejected(
+                        "Rename requires accepted ordinary source and parent identities".into(),
+                    )),
+                }
+            }
+            #[cfg(not(target_os = "linux"))]
             OperationKind::Rename => rename_file_in_parent(
                 source,
                 destination_path.as_ref().expect("rename has target"),

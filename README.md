@@ -27,13 +27,17 @@ On Linux and other non-Windows platforms, expos uses these XDG directories. Unse
 | Session and operation journal paths, including recovery records | `$XDG_STATE_HOME/expos/` | `~/.local/state/expos/` |
 | Thumbnail cache | `$XDG_CACHE_HOME/expos/` | `~/.cache/expos/` |
 
-Application options such as the selected theme and language are saved with the session. Session and journal persistence and per-folder preference updates are currently Windows-only.
+On Windows and Linux, expos saves and restores the session, including open tabs and application options such as the selected theme and language. On Linux, a session save failure during close is logged and the window can still close. Headless screenshots bypass session storage. Operation journal persistence and per-folder preference updates are Windows-only.
 
 On non-Windows platforms, **System default** takes the first nonempty setting from `LC_ALL`, `LC_MESSAGES`, and `LANG`. English locales select English. Japanese, `C`, `POSIX`, and unsupported locales use Japanese.
 
 On Linux, **Open in Terminal** starts a terminal in the selected folder or the current folder when invoked from the blank area. expos uses `TERMINAL` as an executable name or path, then tries `x-terminal-emulator` and common terminal emulators on `PATH`.
 
+On Linux, **Delete** moves ordinary files and directories to the desktop Trash. **Ctrl+Z** restores items with a confirmed receipt from the current app session. If the original name is occupied, Undo leaves the item in Trash. The operation details show when an item was moved but its receipt could not be confirmed.
+
 On Linux, the PC view lists Home, existing XDG user directories, and **File System** (`/`). Removable and remote mounts are deferred.
+
+On Linux, inline **Rename** changes the name of an ordinary file or folder in its current directory. It refuses existing destinations and supports case-only changes on case-sensitive filesystems. Filesystem Undo for Linux rename is unavailable.
 
 ## Video preview support
 

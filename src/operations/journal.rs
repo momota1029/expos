@@ -2626,7 +2626,8 @@ impl JournalStore {
     /// `None` means durable storage is unavailable or app-data has no location.
     /// Corrupt and future journals reach the Shell as a diagnostic and are never overwritten.
     pub fn open_for_app() -> Result<Option<Self>, String> {
-        if !SessionFile::WRITES_SUPPORTED {
+        // Linux の SessionFile は session 専用。journal は Windows のみ有効にする。
+        if !cfg!(windows) {
             return Ok(None);
         }
         let Some(root) = crate::app_paths::state_dir() else {
