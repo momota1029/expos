@@ -1,6 +1,14 @@
 name: Release
 
-on:
+'on':
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - 'tests/shots/**'
+      - 'daily_report/**'
   workflow_dispatch:
     inputs:
       tag:
@@ -12,22 +20,33 @@ permissions:
   contents: read
 
 concurrency:
-  group: manual-release
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'push' && 'main-beta-release' || 'manual-release' }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
-  release:
+  build:
     runs-on: windows-latest
-    permissions:
-      contents: write
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      commit: ${{ steps.version.outputs.commit }}
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
     env:
       RELEASE_TAG: ${{ inputs.tag }}
     steps:
-      - name: Check out the requested tag
+      - name: Check out release tools from the workflow revision
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
-          fetch-depth: 0
+          ref: ${{ github.workflow_sha }}
+          path: release-tools
+          sparse-checkout: release
+          persist-credentials: false
+
+      - name: Check out the source commit or requested tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.sha || format('refs/tags/{0}', inputs.tag) }}
+          path: release-source
           persist-credentials: false
 
       - name: Install stable Rust
@@ -35,108 +54,157 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Validate tag, commit, and package version
-        id: validate
+      - name: Resolve the release version
+        id: version
         shell: pwsh
         run: |
-          $tag = $env:RELEASE_TAG
-          $tagPattern = '^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$'
-          if ($tag -cnotmatch $tagPattern) {
-            throw 'Tag must be a v-prefixed semantic version.'
+          $arguments = @{ RepositoryRoot = 'release-source' }
+          if ($env:GITHUB_EVENT_NAME -eq 'push') {
+            $arguments.RunNumber = $env:GITHUB_RUN_NUMBER
           }
-
-          $head = (& git rev-parse HEAD).Trim()
-          if ($LASTEXITCODE -ne 0) { throw 'Could not resolve checked-out commit.' }
-          $tagCommit = (& git rev-parse "refs/tags/$tag^{commit}").Trim()
-          if ($LASTEXITCODE -ne 0) { throw 'The requested tag does not resolve to a commit.' }
-          if ($head -ne $tagCommit) {
-            throw 'The requested tag does not point to the checked-out commit.'
+          else {
+            $arguments.Tag = $env:RELEASE_TAG
           }
+          $release = ./release-tools/release/Resolve-Version.ps1 @arguments
+          "tag=$($release.Tag)" >> $env:GITHUB_OUTPUT
+          "commit=$($release.Commit)" >> $env:GITHUB_OUTPUT
+          "version=$($release.Version)" >> $env:GITHUB_OUTPUT
+          "prerelease=$($release.IsPrerelease.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
 
-          $metadataText = & cargo metadata --locked --no-deps --format-version 1
-          if ($LASTEXITCODE -ne 0) { throw 'Cargo metadata failed.' }
-          $metadata = ($metadataText -join "`n") | ConvertFrom-Json
-          $packages = @($metadata.packages | Where-Object { $_.name -ceq 'expos' })
-          if ($packages.Count -ne 1) { throw 'Expected exactly one expos package in the workspace.' }
-          $tagVersion = $tag.Substring(1)
-          if ($packages[0].version -cne $tagVersion) {
-            throw "Tag version $tagVersion does not match Cargo package version $($packages[0].version)."
-          }
-          "commit=$head" >> $env:GITHUB_OUTPUT
-          "version=$tagVersion" >> $env:GITHUB_OUTPUT
-          $prereleaseVersion = $tagVersion -replace '\+.*$', ''
-          $isPrerelease = $prereleaseVersion.Contains('-').ToString().ToLowerInvariant()
-          "prerelease=$isPrerelease" >> $env:GITHUB_OUTPUT
-
-      - name: Build and package committed source
+      - name: Check the locked workspace
         shell: pwsh
-        run: ./release/Package-Release.ps1 -Tag $env:RELEASE_TAG
+        working-directory: release-source
+        run: cargo check --locked --workspace
 
-      - name: Refuse to overwrite an existing release
+      - name: Build and package vendored source
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
+          RESOLVED_TAG: ${{ steps.version.outputs.tag }}
         run: |
-          $releaseTags = @(& gh api --paginate --jq '.[].tag_name' "repos/$env:GITHUB_REPOSITORY/releases")
-          if ($LASTEXITCODE -ne 0) {
-            throw 'Could not query existing releases; refusing to publish.'
-          }
-          if ($releaseTags -ccontains $env:RELEASE_TAG) {
-            throw 'A GitHub release already exists for this tag; refusing to overwrite it.'
-          }
+          ./release-tools/release/Package-Release.ps1 -RepositoryRoot release-source -Tag $env:RESOLVED_TAG -AutoBeta:($env:GITHUB_EVENT_NAME -eq 'push')
 
-      - name: Verify remote tag still points to the checked-out commit
+      - name: Upload release assets for the publish job
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: release-source/release/dist/
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ needs.build.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.build.outputs.version }}
+      EXPECTED_COMMIT: ${{ needs.build.outputs.commit }}
+      IS_PRERELEASE: ${{ needs.build.outputs.prerelease }}
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: release-assets
+
+      - name: Create the release and retain recent automated betas
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EXPECTED_COMMIT: ${{ steps.validate.outputs.commit }}
         run: |
           $repository = $env:GITHUB_REPOSITORY
           $tag = $env:RELEASE_TAG
-          $ref = & gh api --jq '[.object.type, .object.sha] | @tsv' "repos/$repository/git/ref/tags/$tag"
-          if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the remote tag; refusing to publish.' }
-          $parts = ($ref -join '') -split "`t"
-          if ($parts.Count -ne 2) { throw 'Remote tag response was malformed; refusing to publish.' }
-          $objectType = $parts[0]
-          $objectSha = $parts[1]
-          for ($depth = 0; $depth -lt 10; $depth++) {
-            if ($objectType -eq 'commit') {
-              if ($objectSha -cne $env:EXPECTED_COMMIT) {
-                throw 'The remote tag no longer points to the checked-out commit.'
-              }
-              break
+          $betaTagPattern = '\Av(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)-beta\.(?<run>[1-9][0-9]*)\z'
+          $betaMarker = '<!-- expos-release-workflow: automated-beta -->'
+
+          function Get-Releases {
+            $rows = & gh api --paginate "repos/$repository/releases?per_page=100" --jq '.[] | {tag_name, draft, prerelease, body, author: .author.login} | @json'
+            if ($LASTEXITCODE -ne 0) { throw 'Could not query GitHub releases.' }
+            foreach ($row in $rows) {
+              $row | ConvertFrom-Json
             }
-            if ($objectType -ne 'tag') { throw 'Remote tag does not resolve to a commit.' }
-            $tagObject = & gh api --jq '[.object.type, .object.sha] | @tsv' "repos/$repository/git/tags/$objectSha"
-            if ($LASTEXITCODE -ne 0) { throw 'Could not dereference the remote annotated tag.' }
-            $parts = ($tagObject -join '') -split "`t"
-            if ($parts.Count -ne 2) { throw 'Remote annotated tag response was malformed.' }
-            $objectType = $parts[0]
-            $objectSha = $parts[1]
-          }
-          if ($objectType -ne 'commit') { throw 'Remote annotated tag nesting exceeded the supported limit.' }
-          if ($objectSha -cne $env:EXPECTED_COMMIT) {
-            throw 'The remote tag no longer points to the checked-out commit.'
           }
 
-      - name: Create draft release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          IS_PRERELEASE: ${{ steps.validate.outputs.prerelease }}
-        run: |
-          $arguments = @(
-            'release', 'create', $env:RELEASE_TAG,
-            '--draft',
-            '--verify-tag',
-            '--title', $env:RELEASE_TAG,
-            '--generate-notes'
-          )
-          if ($env:IS_PRERELEASE -eq 'true') {
-            $arguments += '--prerelease'
+          function Get-PublishedBetas {
+            param($Releases)
+            foreach ($release in $Releases) {
+              if ($release.prerelease -and -not $release.draft -and $release.tag_name -cmatch $betaTagPattern) {
+                [pscustomobject] @{
+                  Tag = $release.tag_name
+                  Run = [bigint]::Parse($Matches['run'])
+                  Managed = $release.author -ceq 'github-actions[bot]' -and ([string] $release.body).Contains($betaMarker)
+                }
+              }
+            }
           }
-          $assets = @(Get-ChildItem -LiteralPath 'release/dist' -File | Sort-Object Name | ForEach-Object { $_.FullName })
-          if ($assets.Count -ne 3) { throw 'Expected two ZIP archives and one SHA256SUMS file.' }
+
+          $assets = @(
+            "release-assets/expos-$tag-windows-x86_64.zip",
+            "release-assets/expos-$tag-source-vendored.zip",
+            'release-assets/SHA256SUMS',
+            'release-assets/channel.json'
+          )
+          foreach ($asset in $assets) {
+            if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) { throw "Missing release asset: $asset" }
+          }
+
+          $releases = @(Get-Releases)
+          $isAutoBeta = $env:GITHUB_EVENT_NAME -eq 'push'
+          if ($isAutoBeta) {
+            $runNumber = [bigint]::Parse($env:GITHUB_RUN_NUMBER)
+            $betas = @(Get-PublishedBetas -Releases $releases)
+            if (@($betas | Where-Object { $_.Run -gt $runNumber }).Count -gt 0) {
+              Write-Output '::notice::Skipping beta publication because a higher beta run number is already published.'
+              exit 0
+            }
+          }
+          if ($releases.tag_name -ccontains $tag) {
+            throw 'A GitHub release already exists for this tag.'
+          }
+
+          $arguments = @('release', 'create', $tag, '--repo', $repository, '--verify-tag', '--generate-notes')
+          if ($isAutoBeta) {
+            $main = & gh api "repos/$repository/git/ref/heads/main" --jq '.object.sha'
+            if ($LASTEXITCODE -ne 0) { throw 'Could not resolve origin/main.' }
+            if ($main -cne $env:EXPECTED_COMMIT) {
+              Write-Output '::notice::Skipping beta publication because origin/main has moved.'
+              exit 0
+            }
+
+            # Create the exact ref atomically. A pre-existing tag may belong to a manual release.
+            & gh api --method POST "repos/$repository/git/refs" -f "ref=refs/tags/$tag" -f "sha=$env:EXPECTED_COMMIT" --silent
+            if ($LASTEXITCODE -ne 0) { throw 'Could not create the beta tag at the built commit.' }
+            $arguments += @('--prerelease', '--title', "beta $env:RELEASE_VERSION", '--notes', $betaMarker)
+          }
+          else {
+            $ref = & gh api "repos/$repository/git/ref/tags/$tag" --jq '[.object.type, .object.sha] | @tsv'
+            if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the remote tag.' }
+            $parts = ($ref -join '') -split "`t"
+            for ($depth = 0; $parts.Count -eq 2 -and $parts[0] -eq 'tag' -and $depth -lt 10; $depth++) {
+              $ref = & gh api "repos/$repository/git/tags/$($parts[1])" --jq '[.object.type, .object.sha] | @tsv'
+              if ($LASTEXITCODE -ne 0) { throw 'Could not dereference the remote annotated tag.' }
+              $parts = ($ref -join '') -split "`t"
+            }
+            if ($parts.Count -ne 2 -or $parts[0] -cne 'commit' -or $parts[1] -cne $env:EXPECTED_COMMIT) {
+              throw 'The remote tag does not resolve to the built commit.'
+            }
+
+            $arguments += @('--draft', '--title', $tag)
+            if ($env:IS_PRERELEASE -eq 'true') { $arguments += '--prerelease' }
+          }
+
           $arguments += $assets
           & gh @arguments
-          if ($LASTEXITCODE -ne 0) { throw 'GitHub draft release creation failed.' }
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
+
+          if ($isAutoBeta) {
+            $releases = @(Get-Releases)
+            $olderBetas = Get-PublishedBetas -Releases $releases |
+              Where-Object { $_.Managed } |
+              Sort-Object Run -Descending |
+              Select-Object -Skip 20
+            foreach ($beta in $olderBetas) {
+              & gh release delete $beta.Tag --repo $repository --cleanup-tag --yes
+              if ($LASTEXITCODE -ne 0) { throw "Could not prune beta $($beta.Tag)." }
+            }
+          }
