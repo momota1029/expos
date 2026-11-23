@@ -73352,6 +73352,166 @@ fn ordinary_trash_shell_writer_child_crash_before_terminal_upsert(cx: &mut gpui:
     }
 
     #[gpui::test]
+    fn context_menu_bounds_are_stable_on_the_first_frame(cx: &mut gpui::TestAppContext) {
+        initialize_directory_binding_test_globals(cx);
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let fixture = tempfile::tempdir().unwrap();
+        let directory = fixture.path().canonicalize().unwrap();
+        let file = directory.join("note.txt");
+        let folder = directory.join("Folder");
+        std::fs::write(&file, "note").unwrap();
+        std::fs::create_dir(&folder).unwrap();
+
+        let handle = cx.open_window(gpui::size(px(900.0), px(560.0)), |_, cx| {
+            FilerShell::new(
+                persistence::Startup::disabled(),
+                Arc::new(input::KeymapRuntime::new()),
+                Vec::new(),
+                cx,
+            )
+        });
+        let shell = handle.entity(cx).unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(handle.into(), cx);
+        let view = visual.read_entity(&shell, |shell, _| shell.active_view().unwrap());
+        visual.update(|_, cx| view.update(cx, |view, cx| view.navigate(directory, cx)));
+        let deadline = Instant::now() + std::time::Duration::from_secs(6);
+        loop {
+            visual.run_until_parked();
+            if visual.read_entity(&view, |view, _| {
+                view.session.has_accepted_current_listing() && view.entries.len() == 2
+            }) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "popup fixture did not load");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        let viewport = visual.read_entity(&view, |view, _| view.scroll_handle.bounds());
+        let window_size = visual.update(|window, _| window.viewport_size());
+        let ((file_key, file_point), (folder_key, folder_point)) =
+            visual.read_entity(&view, |view, _| {
+                let key_and_point = |path: &std::path::Path| {
+                    let key = view
+                        .entries
+                        .iter()
+                        .find(|entry| entry.path.as_deref() == Some(path))
+                        .expect("fixture row")
+                        .key
+                        .clone();
+                    for y in (viewport.top().as_f32() as i32..viewport.bottom().as_f32() as i32)
+                        .step_by(4)
+                    {
+                        for x in (viewport.left().as_f32() as i32..viewport.right().as_f32() as i32)
+                            .step_by(8)
+                        {
+                            let at = gpui::point(px(x as f32 + 1.0), px(y as f32 + 1.0));
+                            if view
+                                .item_menu_request_at(at)
+                                .is_some_and(|request| request.clicked.as_ref() == Some(&key))
+                            {
+                                return (key, at);
+                            }
+                        }
+                    }
+                    panic!("missing visible menu hit target for {path:?}");
+                };
+                (key_and_point(&file), key_and_point(&folder))
+            });
+        let background = gpui::point(
+            viewport.left() + viewport.size.width / 3.0,
+            viewport.top() + viewport.size.height / 3.0,
+        );
+        let edge = gpui::point(viewport.right() - px(16.0), viewport.bottom() - px(4.0));
+
+        for (label, at, item) in [
+            ("file", file_point, Some(file_key)),
+            ("folder", folder_point, Some(folder_key)),
+            ("background", background, None),
+            ("near edge", edge, None),
+        ] {
+            let mut previous_open = None;
+            for _ in 0..2 {
+                visual.update(|window, cx| {
+                    window.dispatch_event(
+                        gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                            position: at,
+                            ..Default::default()
+                        }),
+                        cx,
+                    );
+                    window.dispatch_event(
+                        gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                            button: gpui::MouseButton::Right,
+                            position: at,
+                            click_count: 1,
+                            ..Default::default()
+                        }),
+                        cx,
+                    );
+                    window.dispatch_event(
+                        gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+                            button: gpui::MouseButton::Right,
+                            position: at,
+                            click_count: 1,
+                            ..Default::default()
+                        }),
+                        cx,
+                    );
+                });
+                // GPUI のテストウィンドウはイベントの効果を処理して描画する。
+                // executor を進める前に、右クリックで出た最初の面の実測 bounds を読む。
+                let first = visual
+                    .debug_bounds("shell-menu-panel")
+                    .unwrap_or_else(|| panic!("{label} popup missing from first frame"));
+                visual.read_entity(&shell, |shell, _| {
+                    let expected = if item.is_some() {
+                        menu::Popup::Item
+                    } else {
+                        menu::Popup::Background
+                    };
+                    assert_eq!(
+                        shell.menu.open(),
+                        Some(menu::Open::Popup(expected)),
+                        "{label}"
+                    );
+                    assert_eq!(&shell.menu_target.as_ref().unwrap().item, &item, "{label}");
+                });
+                assert!(
+                    first.size.width > px(0.0) && first.size.height > px(0.0),
+                    "{label}"
+                );
+                assert!(first.left() > px(0.0) && first.top() > px(0.0), "{label}");
+                assert!(first.right() < window_size.width, "{label}");
+                assert!(first.bottom() < window_size.height, "{label}");
+                if label == "near edge" {
+                    assert!(first.right() < at.x, "the popup flips left of the pointer");
+                    assert!(
+                        first.top() < at.y,
+                        "the popup flips or clamps above the pointer"
+                    );
+                }
+
+                for _ in 0..3 {
+                    visual.update(|window, cx| {
+                        window.simulate_next_frame(cx);
+                        window.refresh();
+                    });
+                    visual.run_until_parked();
+                    assert_eq!(
+                        visual.debug_bounds("shell-menu-panel"),
+                        Some(first),
+                        "{label}"
+                    );
+                }
+                assert_eq!(previous_open.unwrap_or(first), first, "{label} reopened");
+                previous_open = Some(first);
+                visual.simulate_keystrokes("escape");
+                assert!(visual.debug_bounds("shell-menu-panel").is_none());
+            }
+        }
+    }
+
+    #[gpui::test]
     fn background_context_menu_mouse_route_admits_one_create_folder(cx: &mut gpui::TestAppContext) {
         initialize_directory_binding_test_globals(cx);
         let directory = tempfile::tempdir().unwrap();

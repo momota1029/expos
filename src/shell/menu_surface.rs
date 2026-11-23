@@ -36,6 +36,35 @@ const TITLE_MIN_WIDTH: f32 = 44.0;
 const MENU_VIEWPORT_MARGIN: f32 = 8.0;
 const POPUP_POINTER_OFFSET: f32 = 12.0;
 
+#[cfg(target_os = "linux")]
+#[derive(PartialEq)]
+pub(crate) struct ShotMenuLayout {
+    bar: Option<MenuScrollLayout>,
+    open: Option<menu::Open>,
+    root: Option<MenuScrollLayout>,
+    child: Option<(menu::ViewSubmenu, usize, MenuScrollLayout)>,
+    highlight: Option<usize>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(PartialEq)]
+struct MenuScrollLayout {
+    bounds: Bounds<Pixels>,
+    offset: gpui::Point<Pixels>,
+    max_offset: gpui::Point<Pixels>,
+}
+
+#[cfg(target_os = "linux")]
+impl From<&ScrollHandle> for MenuScrollLayout {
+    fn from(scroll: &ScrollHandle) -> Self {
+        Self {
+            bounds: scroll.bounds(),
+            offset: scroll.offset(),
+            max_offset: scroll.max_offset(),
+        }
+    }
+}
+
 fn viewport_margin(extent: f32) -> f32 {
     MENU_VIEWPORT_MARGIN.min((extent / 4.0).max(0.0))
 }
@@ -477,6 +506,27 @@ impl FilerShell {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    pub(crate) fn shot_menu_layout(&self, cx: &App) -> Option<ShotMenuLayout> {
+        if self.top_overlay(cx) != Some(overlays::OverlayKind::Menu) {
+            return None;
+        }
+        let open = self.menu.open();
+        Some(ShotMenuLayout {
+            bar: self.menu.bar_visible().then(|| (&self.menu_scroll).into()),
+            open,
+            root: open.map(|open| self.menu_panel_scroll(open, false).into()),
+            child: open.zip(self.menu.view_submenu()).map(|(open, submenu)| {
+                (
+                    submenu,
+                    self.menu.parent_highlight_index(),
+                    self.menu_panel_scroll(open, true).into(),
+                )
+            }),
+            highlight: self.menu.active_highlight(),
+        })
+    }
+
     /// dropdown の面。dropdown はタイトルの真下、popup はポインタの近くに置く。
     fn render_menu_panel(
         &mut self,
@@ -623,9 +673,10 @@ impl FilerShell {
         };
         let palette = gpui_filer_ui::theme_palette(cx);
         let root_scroll = self.menu_panel_scroll(open, false).clone();
+        // 反転・クランプに使った高さを、そのフレームの面とスクロール領域にも使う。
         let mut row_panel = div()
             .id("shell-menu-rows")
-            .max_h(px(root_height - POPUP_PANEL_CHROME_HEIGHT))
+            .h(px(root_height - POPUP_PANEL_CHROME_HEIGHT))
             .overflow_y_scroll()
             .track_scroll(&root_scroll);
         let highlighted = if child_open {
@@ -656,9 +707,11 @@ impl FilerShell {
             ));
         }
         let panel = popup_panel(palette)
+            .debug_selector(|| "shell-menu-panel".to_owned())
             .top(px(top))
             .left(px(left))
             .w(px(width))
+            .h(px(root_height))
             .child(row_panel);
         let mut panels = div().absolute().inset_0().child(panel);
         if let Some(geometry) = geometry.filter(|_| child_open) {
@@ -677,7 +730,7 @@ impl FilerShell {
             };
             let mut child_rows_panel = div()
                 .id("shell-view-submenu-rows")
-                .max_h(px(child_height - POPUP_PANEL_CHROME_HEIGHT))
+                .h(px(child_height - POPUP_PANEL_CHROME_HEIGHT))
                 .overflow_y_scroll()
                 .track_scroll(self.menu_panel_scroll(open, true));
             for (index, (row, shortcut)) in child_rows.into_iter().zip(child_shortcuts).enumerate()
@@ -699,6 +752,7 @@ impl FilerShell {
                     .top(px(child_top))
                     .left(px(child_left))
                     .w(px(geometry.child_column_width))
+                    .h(px(child_height))
                     .child(child_rows_panel),
             );
         }

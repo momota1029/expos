@@ -491,18 +491,18 @@ impl Runner {
         let reason = entry.map_or_else(
             || {
                 if include_previews {
-                    "directory layout and visible thumbnails".to_owned()
+                    "directory and menu layout with visible thumbnails".to_owned()
                 } else {
-                    "directory layout".to_owned()
+                    "directory and menu layout".to_owned()
                 }
             },
-            |name| format!("directory layout with entry {name:?}"),
+            |name| format!("directory and menu layout with entry {name:?}"),
         );
         let mut previous = None;
         let mut consecutive = 0;
         while Instant::now() < until {
             self.next_frame(cx, until).await?;
-            let geometry = self.with_active_view(cx, |view, _, cx| -> ShotResult<_> {
+            let directory = self.with_active_view(cx, |view, _, cx| -> ShotResult<_> {
                 let status = view.session.status();
                 if let Some(error) = status.error() {
                     return Err(format!("directory enumeration failed: {error}").into());
@@ -531,6 +531,10 @@ impl Runner {
                     )
                 }))
             })??;
+            let menu = self
+                .handle
+                .read_with(cx, |shell, cx| shell.shot_menu_layout(cx))?;
+            let geometry = directory.map(|directory| (directory, menu));
             consecutive = match &geometry {
                 None => 0,
                 Some(_) if geometry == previous => consecutive + 1,
