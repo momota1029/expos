@@ -1076,6 +1076,7 @@ mod tests {
             select_extension_on_rename: false,
             show_hidden_items: false,
             item_check_boxes: true,
+            alternate_row_colors: true,
             theme_name: "default".into(),
             language_override: "auto".into(),
             clean_shutdown: false,
@@ -1162,6 +1163,7 @@ mod tests {
         autosave.request(snapshot(r"C:\work"), Instant::now());
         let mut clean = snapshot(r"C:\work");
         clean.clean_shutdown = true;
+        clean.alternate_row_colors = false;
         autosave.flush_now(clean);
 
         let mut now = Instant::now() + SAVE_DEBOUNCE_CAP;
@@ -1170,6 +1172,7 @@ mod tests {
         let bytes = std::fs::read(directory.path().join("session.json")).unwrap();
         let written = SessionSnapshot::from_json(&bytes).unwrap();
         assert!(written.clean_shutdown);
+        assert!(!written.alternate_row_colors);
         // 保存する revision は writer が決める。
         assert_eq!(written.write_revision, 1);
     }

@@ -2,6 +2,31 @@
 use super::*;
 
 impl DirectoryListDemo {
+    pub(super) fn active_group_heading(&self, offset: f32) -> Option<(usize, Option<usize>)> {
+        // 描画と同じ行 top を使う。境界ぴったりでは次の見出しが先頭になる。
+        let next = self
+            .heading_rows
+            .partition_point(|&row| self.heights.offset_before(row) <= offset);
+        Some((
+            *self.heading_rows.get(next.checked_sub(1)?)?,
+            self.heading_rows.get(next).copied(),
+        ))
+    }
+
+    fn sticky_heading(&self) -> Option<(usize, f32, f32)> {
+        let offset = (-self.scroll_handle.offset().y.as_f32()).max(0.0);
+        let (row, next) = self.active_group_heading(offset)?;
+        if offset == self.heights.offset_before(row) {
+            // 行そのものが viewport の先頭にあるので、重ねて描かなくてよい。
+            return None;
+        }
+        let height = self.heights.row_height(row)?.content;
+        let visible = next.map_or(height, |next| {
+            (self.heights.offset_before(next) - offset).min(height)
+        });
+        Some((row, height, visible))
+    }
+
     fn render_scrollbar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let bounds = self.scroll_handle.bounds();
         let height = bounds.size.height.as_f32();
@@ -312,8 +337,8 @@ impl DirectoryListDemo {
                     ))),
             )
             .child(self.render_scrollbar(cx))
-            .when_some(self.sticky_heading_row(), |frame, row| {
-                // 通常行と同じ見出しを、下の項目が透けないよう一覧と同じ地色に重ねる。
+            .when_some(self.sticky_heading(), |frame, (row, height, visible)| {
+                // 次の見出しが近づく分だけ上へ押し出し、その行を overlay で隠さない。
                 let bounds = Rc::new(RefCell::new(None));
                 if let Some(geometry) = self.item_menu_geometry.borrow_mut().as_mut() {
                     geometry.occluding_surfaces.push(bounds.clone());
@@ -323,12 +348,22 @@ impl DirectoryListDemo {
                         bounds,
                         child: div()
                             .id(("sticky-section-heading", row))
+                            .debug_selector(|| format!("sticky-heading-{row}"))
                             .absolute()
                             .top_0()
                             .left_0()
                             .right(px(20.0))
-                            .bg(gpui_filer_ui::theme_palette(cx).surface_base)
-                            .child(self.render_group(row, false, "sticky", cx))
+                            .h(px(visible))
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .absolute()
+                                    .bottom_0()
+                                    .w_full()
+                                    .h(px(height))
+                                    .bg(gpui_filer_ui::theme_palette(cx).surface_base)
+                                    .child(self.render_group(row, false, "sticky", cx)),
+                            )
                             .into_any_element(),
                     }
                     .into_any_element(),

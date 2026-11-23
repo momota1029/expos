@@ -2,7 +2,7 @@ use crate::channel::Channel;
 use install_layout::VersionDir;
 use serde::Deserialize;
 
-use super::source::MAX_ZIP_BYTES;
+use super::{source::MAX_ZIP_BYTES, without_utf8_bom};
 
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct Asset {
@@ -25,8 +25,8 @@ pub(crate) struct Release {
 
 #[derive(Debug)]
 pub(crate) struct ReleaseMetadata {
-    pub channel_json: Vec<u8>,
-    pub sha256sums: Vec<u8>,
+    pub(super) manifest: ChannelManifest,
+    pub(super) sha256sums: Vec<u8>,
 }
 
 #[derive(Clone, Debug)]
@@ -49,8 +49,8 @@ pub(super) struct ReleaseAssets<'a> {
     pub manifest: &'a Asset,
 }
 
-#[derive(Deserialize)]
-struct ChannelManifest {
+#[derive(Debug, Deserialize)]
+pub(super) struct ChannelManifest {
     channel: String,
     version: String,
     zip: String,
@@ -142,7 +142,7 @@ pub(super) fn offer_for(
 ) -> Option<Offer> {
     let assets = release_assets(release)?;
     let metadata = release.metadata.as_ref()?;
-    let manifest: ChannelManifest = serde_json::from_slice(&metadata.channel_json).ok()?;
+    let manifest = &metadata.manifest;
     let channel = Channel::of_version(&manifest.version);
     if manifest.channel != channel.as_str()
         || VersionDir::from_version(&manifest.version).as_ref() != Some(&version)
@@ -175,7 +175,7 @@ pub(super) fn offer_for(
 
 pub(super) fn checksum_for(bytes: &[u8], name: &str) -> Option<String> {
     let mut found = None;
-    for line in std::str::from_utf8(bytes).ok()?.lines() {
+    for line in std::str::from_utf8(without_utf8_bom(bytes)).ok()?.lines() {
         let Some((digest, filename)) = line.split_once(char::is_whitespace) else {
             continue;
         };
@@ -222,11 +222,13 @@ mod tests {
             prerelease: channel == Channel::Beta,
             assets,
             metadata: Some(ReleaseMetadata {
-                channel_json: serde_json::to_vec(&serde_json::json!({
-                    "channel": channel.as_str(), "version": version, "zip": zip, "sha256": HASH,
-                }))
-                .unwrap(),
                 sha256sums: format!("{HASH}  {zip}\n").into_bytes(),
+                manifest: ChannelManifest {
+                    channel: channel.as_str().into(),
+                    version: version.into(),
+                    zip,
+                    sha256: HASH.into(),
+                },
             }),
         }
     }
@@ -284,8 +286,7 @@ mod tests {
         let mut missing = release("4.0.0");
         missing.assets.pop();
         let mut invalid_version = release("3.0.0");
-        invalid_version.metadata.as_mut().unwrap().channel_json =
-            release("3.0.1").metadata.unwrap().channel_json;
+        invalid_version.metadata.as_mut().unwrap().manifest.version = "3.0.1".into();
         let mut mismatch = release("2.0.0");
         mismatch.metadata.as_mut().unwrap().sha256sums[0] = b'b';
         let releases = [missing, invalid_version, mismatch, release("1.1.0")];

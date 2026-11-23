@@ -47,12 +47,26 @@ const CELL_PADDING_Y: f32 = 4.0;
 const CELL_GAP: f32 = 8.0;
 const NAME_FONT_SIZE: f32 = 12.0;
 const NAME_LINE_HEIGHT: f32 = 18.0;
+const GROUP_HEADING_HEIGHT: f32 = gpui_filer_ui::CHECKBOX_COMPACT_HEIGHT;
 /// toolbar と menu の文字。chrome の文字は揃える。
 const CHROME_FONT_SIZE: f32 = 12.0;
 const TILE_ITEM_GAP: f32 = 8.0;
 const GRID_NAME_PADDING_X: f32 = 6.0;
+const GRID_NAME_LINES: f32 = 2.0;
+const GRID_LABEL_HEIGHT: f32 = NAME_LINE_HEIGHT * GRID_NAME_LINES + CELL_PADDING_Y * 2.0;
+const TILE_ROW_BOTTOM_PADDING: f32 = 16.0;
 const ICON_NAME_GAP: f32 = 2.0;
-const ICON_CHECKBOX_OVERHANG: f32 = 12.0;
+const ICON_CHECKBOX_INSET: f32 = 6.0;
+// 44px の hit 領域のうち、余った 26px を箱の左上へ寄せる。
+const ICON_CHECKBOX_HIT_OFFSET: f32 =
+    gpui_filer_ui::CHECKBOX_HIT_SIZE - gpui_filer_ui::CHECKBOX_MARK_SIZE - ICON_CHECKBOX_INSET;
+const ICON_BOX_PADDING: f32 = 4.0;
+const ICON_CHECKBOX_OVERHANG: f32 = ICON_CHECKBOX_HIT_OFFSET - ICON_BOX_PADDING;
+
+fn verify_row_heights() -> bool {
+    static VERIFY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *VERIFY.get_or_init(|| std::env::var_os("GPUI_FILER_VERIFY_HEIGHTS").is_some())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ItemCheckBoxes(pub bool);
@@ -64,6 +78,11 @@ impl Default for ItemCheckBoxes {
 }
 
 impl gpui::Global for ItemCheckBoxes {}
+
+#[derive(Clone, Copy)]
+struct AlternateRowColors(pub bool);
+
+impl gpui::Global for AlternateRowColors {}
 
 /// FolderTree menu は click 座標ではなく、実際に paint された button bounds を基準に置く。
 /// 入口ごとに接続辺が違うため、shell が位置を決める際にも種別を保持する。
@@ -313,7 +332,12 @@ impl ViewLayout {
 
     /// アイコンを囲む余白込みのコンテナサイズ。
     fn icon_container(self, scale: f32) -> f32 {
-        self.icon_size(scale) + if self == Self::Icons { 8.0 } else { 16.0 }
+        self.icon_size(scale)
+            + if self == Self::Icons {
+                ICON_BOX_PADDING * 2.0
+            } else {
+                16.0
+            }
     }
 
     fn tile_name_offset(self, icon_scale: f32, item_check_boxes: bool) -> f32 {
@@ -341,11 +365,29 @@ impl ViewLayout {
         ((width - 24.0 + 16.0) / (minimum + 16.0)).floor().max(1.0) as usize
     }
 
-    fn estimated_height(self, icon_scale: f32) -> f32 {
+    fn entry_row_height(self, icon_scale: f32, label_height: f32) -> f32 {
+        let (top, bottom) = self.grid_row_padding_y();
+        let item = match self {
+            Self::Rows => label_height,
+            Self::Tiles => self.icon_container(icon_scale).max(label_height),
+            Self::Icons => self.icon_container(icon_scale) + ICON_NAME_GAP + label_height,
+        };
+        top + item + bottom
+    }
+
+    fn row_label_height(self) -> f32 {
         match self {
             Self::Rows => ESTIMATED_ROW_HEIGHT,
-            Self::Tiles => self.icon_container(icon_scale).max(44.0) + 16.0,
-            Self::Icons => self.icon_container(icon_scale) + ICON_NAME_GAP + 44.0 + 16.0,
+            Self::Tiles | Self::Icons => GRID_LABEL_HEIGHT,
+        }
+    }
+
+    fn grid_row_padding_y(self) -> (f32, f32) {
+        match self {
+            Self::Rows => (0.0, 0.0),
+            Self::Tiles => (0.0, TILE_ROW_BOTTOM_PADDING),
+            // 画像の左上に置く checkbox の hit 領域が前の行へ出ないようにする。
+            Self::Icons => (ICON_CHECKBOX_OVERHANG, 0.0),
         }
     }
 
@@ -983,6 +1025,18 @@ struct CategoryStripGroup {
     index: usize,
 }
 
+impl ProjectedRow {
+    fn height(&self, layout: ViewLayout, icon_scale: f32, label_height: f32) -> f32 {
+        match self {
+            Self::Heading { .. } => GROUP_HEADING_HEIGHT,
+            Self::Entries { .. } => layout.entry_row_height(icon_scale, label_height),
+            Self::CategoryStrip { .. } => {
+                GROUP_HEADING_HEIGHT + layout.entry_row_height(icon_scale, label_height)
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum ModifiedBucket {
     Unknown,
@@ -1159,6 +1213,7 @@ struct DirectoryListDemo {
     keymap_runtime: std::sync::Arc<input::KeymapRuntime>,
     show_hidden_items_subscription: Option<gpui::Subscription>,
     item_check_boxes_subscription: Option<gpui::Subscription>,
+    alternate_row_colors_subscription: Option<gpui::Subscription>,
     item_check_boxes: bool,
     item_check_boxes_revision: u64,
     external_drop_shell: Option<gpui::WeakEntity<shell::FilerShell>>,
@@ -3169,11 +3224,11 @@ struct PendingRestore {
     scroll_revision: u64,
 }
 
-/// 行の再列挙は実測高を推定値へ戻すため、数値 offset だけを残しても同じ item を
-/// 指さない。更新前の先頭 key と行内位置を一 frame だけ保持する。
+/// projection 更新前の項目と画面内位置を、更新後の行高が揃うまで保持する。
 #[derive(Clone)]
 struct PendingProjectionAnchor {
-    key: entry_identity::EntryKey,
+    /// None は先頭に固定する。幅変更時の中央行 anchor で上書きしない。
+    key: Option<entry_identity::EntryKey>,
     /// anchor row の top が viewport top から何 px の位置にあったか。
     screen_y: f32,
     fallback_offset: f32,
@@ -3922,34 +3977,33 @@ impl DirectoryListDemo {
     /// entry 数のまま reset すると、以前の grid の visible row が entry slice の外を指す。
     fn reset_projected_rows(&mut self) {
         self.rebuild_projected_rows();
-        let rows = self.projected_rows.len();
-        self.heights.reset(rows);
-        self.heights.set_content(0..rows, ESTIMATED_ROW_HEIGHT);
-        self.apply_heading_height_estimates();
-        self.measured = vec![false; rows];
+        self.reset_projected_row_heights();
         self.last_preview_row = 0;
     }
 
-    /// section heading は entry card と別の固定高。全行へ tile/icon の推定高を入れた後に
-    /// これを戻しておかないと、未測定 heading の checkbox と次の section が大きく離れ、
-    /// 初回の実測で scroll anchor まで揺れる。
-    fn apply_heading_height_estimates(&mut self) {
-        for &row in &self.heading_rows {
-            self.heights
-                .set_content(row..row + 1, gpui_filer_ui::CHECKBOX_COMPACT_HEIGHT);
-        }
-        let category_height =
-            self.layout.estimated_height(self.icon_scale) + gpui_filer_ui::CHECKBOX_HIT_SIZE;
+    fn reset_projected_row_heights(&mut self) {
+        let rows = self.projected_rows.len();
+        self.heights.reset(rows);
+        // 固定高は projection の作成時点で確定する。初回の可視行計測で heading を
+        // 落としたり、未表示だった行へスクロールしたときに offset を動かしたりしない。
+        let label_height = self.layout.row_label_height();
+        let entry_height = self.layout.entry_row_height(self.icon_scale, label_height);
+        self.heights.set_content(0..rows, entry_height);
         for (row, projected) in self.projected_rows.iter().enumerate() {
-            if matches!(projected, ProjectedRow::CategoryStrip { .. }) {
-                self.heights.set_content(row..row + 1, category_height);
+            if !matches!(projected, ProjectedRow::Entries { .. }) {
+                self.heights.set_content(
+                    row..row + 1,
+                    projected.height(self.layout, self.icon_scale, label_height),
+                );
             }
         }
+        self.measured = vec![!verify_row_heights(); rows];
     }
 
     fn rebuild_projected_rows(&mut self) {
         self.projected_rows.clear();
         if self.entries.is_empty() {
+            self.heading_rows.clear();
             self.selection.clear_section_focus();
             return;
         }
@@ -4116,24 +4170,6 @@ impl DirectoryListDemo {
         self.row_entries(row).next()
     }
 
-    fn sticky_heading_row(&self) -> Option<usize> {
-        if self.group_by == GroupBy::None {
-            return None;
-        }
-        let offset = (-self.scroll_handle.offset().y.as_f32()).max(0.0);
-        let row = self.heights.row_at_offset(offset);
-        let index = self.heading_rows.partition_point(|heading| *heading <= row);
-        let heading = index.checked_sub(1).map(|index| self.heading_rows[index])?;
-        // 通常の heading がまだ画面内の先頭にいる間は overlay を出さない。
-        // 初期表示だけ別の見た目になる二重描画を避ける。
-        let bottom = self.heights.offset_before(heading)
-            + self
-                .heights
-                .row_height(heading)
-                .map_or(gpui_filer_ui::CHECKBOX_COMPACT_HEIGHT, |height| height.content);
-        (bottom < offset).then_some(heading)
-    }
-
     fn apply_group_order(&mut self) {
         // 既に sort 済みの順を section 内へ保った stable grouping。v5 と同じく
         // grouping は順序の大枠だけを決め、各 section の列 sort は壊さない。
@@ -4166,6 +4202,40 @@ impl DirectoryListDemo {
             .and_then(|index| self.projection_anchor_at(index, offset))
     }
 
+    fn capture_view_change_anchor(&mut self) {
+        let offset = (-self.scroll_handle.offset().y.as_f32()).max(0.0);
+        // 描画を挟まず次の操作が来ても、直前の投影で収まる位置を基準にする。
+        let offset = self
+            .pending_projection_anchor
+            .as_ref()
+            .filter(|anchor| offset > 0.0 && anchor.scroll_revision == self.scroll_revision)
+            .map_or(offset, |anchor| self.projection_anchor_offset(anchor));
+        let viewport = self.scroll_handle.bounds().size.height.as_f32();
+        let anchor = if offset > 0.0 {
+            let first_row = self.heights.row_at_offset(offset);
+            (first_row..self.projected_rows.len())
+                .take_while(|&row| {
+                    viewport <= 0.0 || self.heights.offset_before(row) < offset + viewport
+                })
+                .find_map(|row| self.first_entry_in_row(row))
+                .and_then(|index| self.projection_anchor_at(index, offset))
+        } else {
+            None
+        };
+        self.pending_projection_anchor = Some(match anchor {
+            Some(anchor) => PendingProjectionAnchor {
+                fallback_offset: 0.0,
+                ..anchor
+            },
+            None => PendingProjectionAnchor {
+                key: None,
+                screen_y: 0.0,
+                fallback_offset: 0.0,
+                scroll_revision: self.scroll_revision,
+            },
+        });
+    }
+
     fn projection_anchor_avoiding(
         &self,
         avoided: &entry_identity::EntryKey,
@@ -4186,7 +4256,7 @@ impl DirectoryListDemo {
     fn projection_anchor_at(&self, index: usize, offset: f32) -> Option<PendingProjectionAnchor> {
         let row = self.entry_row(index)?;
         Some(PendingProjectionAnchor {
-            key: self.entries.get(index)?.key.clone(),
+            key: Some(self.entries.get(index)?.key.clone()),
             screen_y: self.heights.offset_before(row) - offset,
             fallback_offset: offset,
             scroll_revision: self.scroll_revision,
@@ -4200,6 +4270,9 @@ impl DirectoryListDemo {
         offset: f32,
         viewport: f32,
     ) -> Option<PendingProjectionAnchor> {
+        if offset == 0.0 {
+            return None;
+        }
         let is_visible = |index: usize| {
             let Some(row) = self.entry_row(index) else {
                 return false;
@@ -4226,6 +4299,22 @@ impl DirectoryListDemo {
         self.projection_anchor_at(index, offset)
     }
 
+    fn projection_anchor_offset(&self, anchor: &PendingProjectionAnchor) -> f32 {
+        let offset = anchor
+            .key
+            .as_ref()
+            .and_then(|key| self.entries.iter().position(|entry| entry.key == *key))
+            .and_then(|index| self.entry_row(index))
+            .map(|row| self.heights.offset_before(row) - anchor.screen_y)
+            .unwrap_or(anchor.fallback_offset);
+        let viewport = self.scroll_handle.bounds().size.height.as_f32();
+        if viewport > 0.0 {
+            clamp_scroll_offset(offset, self.heights.total_height() + 44.0, viewport)
+        } else {
+            offset.max(0.0)
+        }
+    }
+
     fn apply_projection_anchor(&mut self, consume: bool) {
         let Some(anchor) = self.pending_projection_anchor.as_ref() else {
             return;
@@ -4234,20 +4323,7 @@ impl DirectoryListDemo {
             self.pending_projection_anchor = None;
             return;
         }
-        let offset = self
-            .entries
-            .iter()
-            .map(|entry| &entry.key)
-            .position(|key| key == &anchor.key)
-            .and_then(|index| self.entry_row(index))
-            .map(|row| self.heights.offset_before(row) - anchor.screen_y)
-            .unwrap_or(anchor.fallback_offset);
-        let viewport = self.scroll_handle.bounds().size.height.as_f32();
-        let offset = if viewport > 0.0 {
-            clamp_scroll_offset(offset, self.heights.total_height() + 44.0, viewport)
-        } else {
-            offset.max(0.0)
-        };
+        let offset = self.projection_anchor_offset(anchor);
         self.scroll_handle
             .set_offset(gpui::point(px(0.0), -px(offset)));
         if consume {
@@ -4370,6 +4446,7 @@ impl DirectoryListDemo {
             }
             return;
         }
+        self.capture_view_change_anchor();
         let keys: Vec<_> = self.entries.iter().map(|entry| entry.key.clone()).collect();
         let selection = self.selection.snapshot(&keys);
         self.layout = layout;
@@ -4380,9 +4457,7 @@ impl DirectoryListDemo {
         self.apply_group_order();
         let keys: Vec<_> = self.entries.iter().map(|entry| entry.key.clone()).collect();
         self.selection.restore_remapped(selection, &keys);
-        self.rebuild_projected_rows();
-        self.layout_width = 0.0;
-        self.measured = vec![false; self.heights.len()];
+        self.rebuild_view_projection();
         self.presentation_revision = self.presentation_revision.wrapping_add(1);
         self.emit_info_projection(cx);
         cx.notify();
@@ -5043,7 +5118,13 @@ impl DirectoryListDemo {
             .flatten()
             .or_else(|| self.pending_rename_anchor.take());
         self.defer_projection_anchor_until_measured = rename_anchor.is_some();
-        self.pending_projection_anchor = rename_anchor.or_else(|| self.projection_anchor());
+        self.pending_projection_anchor = rename_anchor
+            .or_else(|| {
+                self.pending_projection_anchor
+                    .take()
+                    .filter(|anchor| anchor.scroll_revision == self.scroll_revision)
+            })
+            .or_else(|| self.projection_anchor());
         let keys: Vec<_> = self.entries.iter().map(|entry| entry.key.clone()).collect();
         let mut snapshot = self.selection.snapshot(&keys);
         if settled_rename && let Some(pending) = settled_geometry.as_ref() {
@@ -5890,6 +5971,7 @@ impl DirectoryListDemo {
         // 並べ替えは rename 開始時の projection identity を無効にする。revision を
         // 進める前に pin を解放し、完了通知が古い並びへ補正を掛けないようにする。
         self.release_pending_rename_geometry(cx);
+        self.capture_view_change_anchor();
         let keys: Vec<_> = self.entries.iter().map(|entry| entry.key.clone()).collect();
         let snapshot = self.selection.snapshot(&keys);
         self.sort = sort;
@@ -5900,11 +5982,8 @@ impl DirectoryListDemo {
         // 並びが変わったので、index を捕捉した古い gesture を無効にする。
         self.presentation_revision = self.presentation_revision.wrapping_add(1);
         self.emit_info_projection(cx);
-        // 並びが変わると行の高さの対応も変わる。測定を捨てて先頭から測り直す。
-        self.layout_width = 0.0;
-        self.measured = vec![false; self.heights.len()];
+        self.rebuild_view_projection();
         self.hovered_item_part = None;
-        self.scroll_handle.set_offset(gpui::point(px(0.0), px(0.0)));
         cx.emit(DirectoryEvent::StateChanged);
         self.emit_folder_prefs_changed(folder_view_preferences::ChangedField::Sort, cx);
         cx.notify();
@@ -5912,6 +5991,7 @@ impl DirectoryListDemo {
 
     fn cycle_grouping(&mut self, cx: &mut Context<Self>) {
         self.release_pending_rename_geometry(cx);
+        self.capture_view_change_anchor();
         let keys: Vec<_> = self.entries.iter().map(|entry| entry.key.clone()).collect();
         let snapshot = self.selection.snapshot(&keys);
         self.group_by = match self.group_by {
@@ -5926,7 +6006,7 @@ impl DirectoryListDemo {
         self.selection.restore_remapped(snapshot, &keys);
         self.presentation_revision = self.presentation_revision.wrapping_add(1);
         self.emit_info_projection(cx);
-        self.layout_width = 0.0;
+        self.rebuild_view_projection();
         self.hovered_item_part = None;
         cx.emit(DirectoryEvent::StateChanged);
         self.emit_folder_prefs_changed(folder_view_preferences::ChangedField::Group, cx);
@@ -6211,8 +6291,7 @@ impl DirectoryListDemo {
                 ),
             })
             .collect::<Vec<_>>();
-        let mut heights = RowHeights::new(entries.len());
-        heights.set_content(0..entries.len(), ESTIMATED_ROW_HEIGHT);
+        let heights = RowHeights::new(0);
         // 保存値は範囲外かもしれない。表示の制約へ丸めてから使う。
         let layout = saved.map_or(ViewLayout::Rows, |state| {
             ViewLayout::from_value(state.layout)
@@ -6245,6 +6324,7 @@ impl DirectoryListDemo {
             keymap_runtime,
             show_hidden_items_subscription: None,
             item_check_boxes_subscription: None,
+            alternate_row_colors_subscription: None,
             item_check_boxes: true,
             item_check_boxes_revision: 0,
             external_drop_shell: None,
@@ -6276,7 +6356,7 @@ impl DirectoryListDemo {
             pane_width_projection: shell::DEFAULT_SIDEBAR_WIDTH,
             measured_viewport_width: None,
             viewport_reconcile_scheduled: Rc::new(Cell::new(false)),
-            measured: vec![false; 20_000],
+            measured: Vec::new(),
             focus_handle: cx.focus_handle(),
             last_click_was_blank: false,
             session,
@@ -6378,6 +6458,12 @@ impl DirectoryListDemo {
                 view.reset_projected_rows();
                 view.cancel_rectangle_drag();
                 cx.notify();
+            }));
+        view.alternate_row_colors_subscription =
+            Some(cx.observe_global::<AlternateRowColors>(|view, cx| {
+                if view.layout == ViewLayout::Rows {
+                    cx.notify();
+                }
             }));
         view
     }
@@ -9795,7 +9881,7 @@ impl DirectoryListDemo {
                     let offset = (-self.scroll_handle.offset().y.as_f32()).max(0.0);
                     let mut anchor = self.projection_anchor_at(index, offset);
                     if let Some(anchor) = anchor.as_mut() {
-                        anchor.key = expected_key.clone();
+                        anchor.key = Some(expected_key.clone());
                     }
                     PendingRenameGeometry {
                         token: None,
@@ -10328,9 +10414,10 @@ impl DirectoryListDemo {
         self.touch_item_tap_series = None;
         self.last_click_was_blank = false;
         self.cancel_rectangle_drag();
+        self.capture_view_change_anchor();
         self.layout = layout;
         self.hovered_item_part = None;
-        self.layout_width = 0.0;
+        self.rebuild_view_projection();
         cx.emit(DirectoryEvent::StateChanged);
         self.emit_folder_prefs_changed(folder_view_preferences::ChangedField::Layout, cx);
         cx.notify();
@@ -11970,13 +12057,6 @@ impl DirectoryListDemo {
         if measuring {
             return content.into_any_element();
         }
-        let selected = self.selection.rectangle_contains(
-            index,
-            self.rectangle_drag
-                .as_ref()
-                .and_then(|drag| self.rectangle_content_rect(drag))
-                .is_some_and(|rectangle| self.item_intersects_rectangle(index, rectangle)),
-        );
         // 非選択行の Native touch は Windows Direct Manipulation に渡し、一覧の pan を保つ。
         let touch_drag_selected = self.selection.contains(index);
         let generation = self.location_generation;
@@ -12010,22 +12090,6 @@ impl DirectoryListDemo {
         let drag_tab_id = self.external_drop_view_id;
         let rename_editor_active = self.rename_session.is_some();
         let drag_slot = self.internal_drag_snapshot.clone();
-        // ハイライトはキーボードやタッチのあと出さない。ポインタの位置そのものは
-        // `hovered_item_part` に残るので、hover を条件にした binding は当たり続ける。
-        let hovered = grouped
-            && self.interaction.hover_enabled()
-            && self
-                .hovered_item_part
-                .is_some_and(|(item, _)| item == index);
-        // 選択モード中はフォーカスが選択と別の場所を指す。そこを灰色で示さないと、
-        // 矢印で動かしたカーソルがどこにあるか読めない。
-        // 通常モードではフォーカス＝選択なので、灰色は出さない。
-        let focused = grouped
-            && self.selection.is_selection_mode()
-            && self.selection.focused() == Some(index);
-        // フォーカスが選択の上に来たら、選択を少し強くして「今ここ」を重ねて示す。
-        let focused_selected = focused && selected;
-        let palette = gpui_filer_ui::theme_palette(cx);
         let mut surface = content
             // 行番号ではなく項目と一覧世代を含め、gestureの接触元を固定する。
             .id(item_surface_element_id(
@@ -12036,26 +12100,6 @@ impl DirectoryListDemo {
                 revision,
             ))
             .debug_selector(|| format!("item-surface-{part}-{index}"))
-            .when(!matches!(part, "visual" | "name"), |surface| {
-                surface
-                    .when(selected, |surface| surface.bg(palette.selection_bg))
-                    .when(focused_selected, |surface| surface.bg(palette.selection_focus_bg))
-                    .when(focused && !selected, |surface| surface.bg(palette.focus_bg))
-                    .when(hovered, |surface| {
-                        surface.bg(if selected {
-                            palette.selection_hover_bg
-                        } else {
-                            palette.hover_bg
-                        })
-                    })
-                    .hover(move |style| {
-                        style.bg(if selected {
-                            palette.selection_hover_bg
-                        } else {
-                            palette.hover_bg
-                        })
-                    })
-            })
             .when(grouped, |surface| {
                 // 項目向けの binding は icon と名前の hit 領域で判定する。
                 surface.on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
@@ -12589,6 +12633,20 @@ impl DirectoryListDemo {
         .into_any_element()
     }
 
+    fn projection_width(&self) -> f32 {
+        self.measured_viewport_width
+            .unwrap_or(self.pane_width_projection)
+            .max(1.0)
+    }
+
+    fn rebuild_view_projection(&mut self) {
+        self.layout_width = self.projection_width();
+        self.columns = self
+            .layout
+            .columns(self.layout_width, self.icon_scale, self.item_check_boxes);
+        self.reset_projected_rows();
+    }
+
     fn prepare_layout(
         &mut self,
         window: &mut Window,
@@ -12596,10 +12654,7 @@ impl DirectoryListDemo {
     ) -> (std::time::Duration, usize) {
         self.detect_pending_restore_scroll();
         let viewport = self.scroll_handle.bounds().size.height.as_f32();
-        let width = self
-            .measured_viewport_width
-            .unwrap_or(self.pane_width_projection)
-            .max(1.0);
+        let width = self.projection_width();
         let columns = self
             .layout
             .columns(width, self.icon_scale, self.item_check_boxes);
@@ -12609,18 +12664,14 @@ impl DirectoryListDemo {
             self.columns = columns;
             self.layout_width = width;
             self.rebuild_projected_rows();
-            self.heights.reset(self.projected_rows.len());
-            self.measured = vec![false; self.heights.len()];
-            let estimate = self.layout.estimated_height(self.icon_scale);
-            self.heights.set_content(0..self.heights.len(), estimate);
-            self.apply_heading_height_estimates();
+            self.reset_projected_row_heights();
             // operation reconciliation 等のより強い anchor が無いときだけ、resize
             // 開始時の focus / 中央項目を同じ screen_y へ戻す。
             if self.pending_projection_anchor.is_none() {
                 self.pending_projection_anchor = resize_anchor;
             }
         }
-        // 通常の projection 差替えは、推定高でも先に対象行を可視範囲へ入れる。
+        // projection 差替え時は先に対象行を可視範囲へ入れる。
         // rename reconciliation はここで一度動かすと、実測後にももう一度戻るため
         // 最終測定まで defer する。
         if !self.defer_projection_anchor_until_measured {
@@ -12641,8 +12692,7 @@ impl DirectoryListDemo {
                 self.measured[row] = false;
             }
         }
-        // GPUIと同じ文字整形で折り返しを測る。行全体のTaffy layoutを繰り返さない。
-        // row ごとの呼出し時間を既存の opt-in 計測内でまとめ、通常描画に時計読取を足さない。
+        // inline rename の折り返しだけ、GPUI と同じ文字整形で測る。
         let measure_rows_started = self.frame_profile.start();
         let mut measured_rows = 0;
         loop {
@@ -12696,46 +12746,36 @@ impl DirectoryListDemo {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // `render_group` より先に確定した折返し高を渡す。F2 直後だけ親の
-        // stretch 高で描かれて次 frame に縮む、という見た目の揺れを防ぐ。
-        self.sync_rename_input_height(row, width, window, cx);
-        let shaped = self.measure_group_text(row, width, window, cx);
-        let contains_rename = self.rename_session.as_ref().is_some_and(|session| {
-            self.row_entries(row)
-                .any(|index| self.entries[index].key == session.key)
+        let input = self.rename_session.as_ref().and_then(|session| {
+            (session.location_generation == self.location_generation
+                && session.presentation_revision == self.presentation_revision
+                && self
+                    .row_entries(row)
+                    .any(|index| self.entries[index].key == session.key))
+            .then(|| session.input.clone())
         });
-        // 診断時は実要素との一致も検査する。通常時の失敗だけ従来測定へ戻す。
-        static VERIFY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        let verify =
-            *VERIFY.get_or_init(|| std::env::var_os("GPUI_FILER_VERIFY_HEIGHTS").is_some());
-        let measured = if let Some(shaped) = shaped {
-            // RenameInput の最初の root layout は、custom element の幅が paint で
-            // 確定する前に親の既知 height を受ける。その一回限りの 138px を
-            // height tree に採用すると、内容が80pxへ収束した後も空行が残る。
-            // ここでは表示と同じ text system の折返し高を authoritative にする。
-            // 通常行だけは診断モードで従来どおり実レイアウトとの差を検査する。
-            if !verify || contains_rename {
-                shaped
-            } else {
-                let actual = self
-                    .render_group(row, true, "measure", cx)
-                    .into_any_element()
-                    .layout_as_root(
-                        size(
-                            gpui::AvailableSpace::Definite(px(width)),
-                            gpui::AvailableSpace::MaxContent,
-                        ),
-                        window,
-                        cx,
-                    )
-                    .height
-                    .as_f32();
-                assert!(
-                    (actual - shaped).abs() < 1.0,
-                    "row {row}: shaped={shaped}, layout={actual}"
-                );
-                actual
-            }
+        let normal_label_height = self.layout.row_label_height();
+        let label_height = match &input {
+            Some(input) => self
+                .shaped_name_height(
+                    input.read(cx).text(),
+                    self.item_name_text_width(width),
+                    window,
+                )
+                .map(|height| {
+                    // 初回の editor layout から折り返し高を揃える。
+                    input.update(cx, |input, _| input.set_expected_height(px(height)));
+                    (height + CELL_PADDING_Y * 2.0).max(normal_label_height)
+                }),
+            None => Some(normal_label_height),
+        };
+        let reserved = label_height.map(|label_height| {
+            self.projected_rows[row].height(self.layout, self.icon_scale, label_height)
+        });
+        let measured = if let Some(reserved) = reserved
+            && (input.is_some() || !verify_row_heights())
+        {
+            reserved
         } else {
             let actual = self
                 .render_group(row, true, "measure", cx)
@@ -12750,15 +12790,23 @@ impl DirectoryListDemo {
                 )
                 .height
                 .as_f32();
-            actual
+            if let Some(reserved) = reserved {
+                assert!(
+                    (actual - reserved).abs() < 1.0,
+                    "row {row}: reserved={reserved}, layout={actual}"
+                );
+            }
+            reserved.unwrap_or(actual)
         };
-        self.heights.set_content(row..row + 1, measured.max(44.0));
+        self.heights.set_content(row..row + 1, measured);
         self.measured[row] = true;
     }
 
+    fn grid_cell_width(&self, width: f32) -> f32 {
+        (width - 24.0 - 16.0 * self.columns.saturating_sub(1) as f32) / self.columns as f32
+    }
+
     fn item_name_text_width(&self, width: f32) -> f32 {
-        let cell_width =
-            (width - 24.0 - 16.0 * self.columns.saturating_sub(1) as f32) / self.columns as f32;
         match self.layout {
             ViewLayout::Rows => {
                 self.row_columns_for_width(width, self.effective_column_prefs())
@@ -12768,13 +12816,13 @@ impl DirectoryListDemo {
                     - CELL_GAP
             }
             ViewLayout::Tiles => {
-                cell_width
+                self.grid_cell_width(width)
                     - self
                         .layout
                         .tile_name_offset(self.icon_scale, self.item_check_boxes)
                     - GRID_NAME_PADDING_X * 2.0
             }
-            ViewLayout::Icons => cell_width - GRID_NAME_PADDING_X * 2.0,
+            ViewLayout::Icons => self.grid_cell_width(width) - GRID_NAME_PADDING_X * 2.0,
         }
         .max(1.0)
     }
@@ -12797,63 +12845,6 @@ impl DirectoryListDemo {
                 .map(|line| line.size(px(NAME_LINE_HEIGHT)).height.as_f32())
                 .sum(),
         )
-    }
-
-    fn sync_rename_input_height(
-        &self,
-        row: usize,
-        width: f32,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(input) = self.rename_session.as_ref().and_then(|session| {
-            self.entries
-                .iter()
-                .position(|entry| entry.key == session.key)
-                .filter(|index| self.entry_row(*index) == Some(row))
-                .map(|_| session.input.clone())
-        }) else {
-            return;
-        };
-        let name = input.read(cx).text().to_owned();
-        let Some(height) = self.shaped_name_height(&name, self.item_name_text_width(width), window)
-        else {
-            return;
-        };
-        input.update(cx, |input, _| input.set_expected_height(px(height)));
-    }
-
-    fn measure_group_text(&self, row: usize, width: f32, window: &Window, cx: &App) -> Option<f32> {
-        let mut height = ESTIMATED_ROW_HEIGHT;
-        for index in self.row_entries(row) {
-            let entry = &self.entries[index];
-            let rename_name = self
-                .rename_session
-                .as_ref()
-                .filter(|session| session.key == entry.key)
-                .map(|session| session.input.read(cx).text().to_owned());
-            if self.layout == ViewLayout::Rows && rename_name.is_none() {
-                // 名前は一行で省略する。編集中の入力欄だけは折り返し高を測る。
-                continue;
-            }
-            let label = if self.layout != ViewLayout::Rows && rename_name.is_none() {
-                // 通常の名前は18pxの2行と上下余白で、44pxのhit領域に収まる。
-                44.0
-            } else {
-                let name = rename_name.as_deref().unwrap_or(&entry.name);
-                let text_width = self.item_name_text_width(width);
-                let text_height = self.shaped_name_height(name, text_width, window)?;
-                (text_height + CELL_PADDING_Y * 2.0).max(ESTIMATED_ROW_HEIGHT)
-            };
-            let container = self.layout.icon_container(self.icon_scale);
-            let item = match self.layout {
-                ViewLayout::Rows => label,
-                ViewLayout::Tiles => label.max(container) + 16.0,
-                ViewLayout::Icons => container + ICON_NAME_GAP + label + 16.0,
-            };
-            height = height.max(item);
-        }
-        Some(height)
     }
 }
 
@@ -13688,6 +13679,7 @@ impl Render for DirectoryListDemo {
 mod layout_tests {
     use super::*;
     use std::cell::Cell;
+    use std::sync::Arc;
 
     struct InlineRenameRouteHarness {
         shell: gpui::Entity<shell::FilerShell>,
@@ -14603,18 +14595,14 @@ mod layout_tests {
         cx.set_global(crate::ItemCheckBoxes(false));
         let (harness, window_handle) = hidden_visibility_window(cx, "checkbox-geometry");
         let mut window = gpui::VisualTestContext::from_window(window_handle, cx);
-        window.run_until_parked();
         let view = window.read_entity(&harness, |harness, _| harness.view.clone());
 
         for layout in [ViewLayout::Rows, ViewLayout::Tiles, ViewLayout::Icons] {
-            window.update_entity(&view, |view, _| {
-                view.layout = layout;
-                view.layout_width = view.scroll_handle.bounds().size.width.as_f32().max(320.0);
-                view.columns = layout.columns(view.layout_width, view.icon_scale, false);
-                view.reset_projected_rows();
-                let measured_height = layout.estimated_height(view.icon_scale) + 64.0;
-                view.heights.set_content(0..1, measured_height);
+            window.update(|_, cx| cx.set_global(crate::ItemCheckBoxes(false)));
+            window.update_entity(&view, |view, cx| {
+                view.set_layout(layout, cx);
             });
+            window.run_until_parked();
             window.read_entity(&view, |view, _| {
                 let rects = view.item_hit_rects(0);
                 let expected = if layout == ViewLayout::Rows { 1 } else { 2 };
@@ -14626,19 +14614,13 @@ mod layout_tests {
                 );
             });
 
-            window.update_entity(&view, |view, _| {
-                view.item_check_boxes = true;
-                view.columns = layout.columns(view.layout_width, view.icon_scale, true);
-                view.reset_projected_rows();
-                let measured_height = layout.estimated_height(view.icon_scale) + 64.0;
-                view.heights.set_content(0..1, measured_height);
-            });
+            window.update(|_, cx| cx.set_global(crate::ItemCheckBoxes(true)));
+            window.run_until_parked();
             window.read_entity(&view, |view, _| {
                 let rects = view.item_hit_rects(0);
                 let expected = if layout == ViewLayout::Rows { 2 } else { 3 };
                 assert_eq!(rects.len(), expected, "layout={layout:?}");
             });
-            window.update_entity(&view, |view, _| view.item_check_boxes = false);
         }
     }
 
@@ -14664,10 +14646,16 @@ mod layout_tests {
             visual.origin.y + visual.size.height / 2.0,
         );
         let half_hit = gpui_filer_ui::CHECKBOX_HIT_SIZE / 2.0;
-        let checkbox = gpui::point(
-            visual.origin.x + px(half_hit - ICON_CHECKBOX_OVERHANG),
-            visual.origin.y + px(half_hit),
-        );
+        let hit = window.debug_bounds("icon-checkbox-hit-0").unwrap();
+        assert_eq!(hit.size, size(px(half_hit * 2.0), px(half_hit * 2.0)));
+        assert!(hit.origin.y >= visual.origin.y - px(ICON_CHECKBOX_OVERHANG));
+        let mark = window
+            .debug_bounds("checkbox-mark-select-0-visibility-0")
+            .unwrap();
+        let inset = px(ICON_BOX_PADDING + ICON_CHECKBOX_INSET);
+        assert_eq!(mark.origin, visual.origin + gpui::point(inset, inset));
+        assert_eq!(mark.size, size(px(18.0), px(18.0)));
+        let checkbox = gpui::point(hit.origin.x + px(half_hit), hit.origin.y + px(half_hit));
         let modifiers = gpui::Modifiers::default();
 
         window.simulate_mouse_down(center, gpui::MouseButton::Left, modifiers);
@@ -14677,6 +14665,368 @@ mod layout_tests {
         window.simulate_mouse_down(checkbox, gpui::MouseButton::Left, modifiers);
         window.simulate_mouse_up(checkbox, gpui::MouseButton::Left, modifiers);
         window.read_entity(&view, |view, _| assert!(!view.selection.contains(0)));
+    }
+
+    #[gpui::test]
+    fn grid_section_checkboxes_align_with_the_first_item_mark(cx: &mut gpui::TestAppContext) {
+        cx.set_global(crate::ItemCheckBoxes(true));
+        let (harness, window_handle) = hidden_visibility_window(cx, "grid-checkbox-heading");
+        let mut window = gpui::VisualTestContext::from_window(window_handle, cx);
+        let view = window.read_entity(&harness, |harness, _| harness.view.clone());
+        window.run_until_parked();
+        window.update_entity(&view, |view, cx| {
+            // この harness には pane 幅を投影する Shell がない。
+            view.set_pane_width_projection(view.scroll_handle.bounds().size.width.as_f32(), cx);
+            view.cycle_grouping(cx);
+            view.cycle_grouping(cx);
+        });
+
+        for layout in [ViewLayout::Tiles, ViewLayout::Icons] {
+            window.update_entity(&view, |view, cx| {
+                view.set_layout(layout, cx);
+            });
+            window.run_until_parked();
+            let heading = window
+                .debug_bounds("checkbox-mark-row-section-select-0")
+                .unwrap();
+            let item = window
+                .debug_bounds("checkbox-mark-select-0-visibility-0")
+                .unwrap();
+            assert!((heading.origin.x - item.origin.x).abs() <= px(1.0), "{layout:?}");
+        }
+    }
+
+    fn grouped_rows_window(
+        cx: &mut gpui::TestAppContext,
+    ) -> (
+        gpui::Entity<DirectoryListDemo>,
+        &mut gpui::VisualTestContext,
+    ) {
+        cx.add_window_view(|_, cx| {
+            let mut view =
+                DirectoryListDemo::new_at(Arc::new(input::KeymapRuntime::new()), None, cx);
+            let mut entries = vec![drag_test_entry(
+                Some("C:/grouped-rows/a.log"),
+                EntryKind::File,
+                None,
+            )];
+            entries.extend((0..11).map(|i| {
+                let path = format!("C:/grouped-rows/b-{i:02}.txt");
+                let mut entry = drag_test_entry(Some(&path), EntryKind::File, None);
+                entry.modified = Some(std::time::UNIX_EPOCH);
+                entry
+            }));
+            entries.extend((0..40).map(|i| {
+                let path = format!("C:/grouped-rows/c-{i:02}.zip");
+                drag_test_entry(Some(&path), EntryKind::File, None)
+            }));
+            view.session.adopt_demo(Arc::new(entries.clone()));
+            view.entries = entries;
+            view.layout = ViewLayout::Rows;
+            view.rebuild_row_details();
+            view.rebuild_view_projection();
+            view
+        })
+    }
+
+    #[gpui::test]
+    fn grouped_rows_regroup_at_top_with_or_without_an_intermediate_frame(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        for draw_between in [false, true] {
+            let (view, window) = grouped_rows_window(cx);
+            window.update_entity(&view, |view, cx| {
+                view.apply_listing(cx);
+                view.toggle_sort(Column::Name, cx);
+                view.toggle_sort(Column::Name, cx);
+                view.cycle_grouping(cx);
+                if !draw_between {
+                    view.cycle_grouping(cx);
+                }
+            });
+            window.run_until_parked();
+            if draw_between {
+                window.read_entity(&view, |view, _| {
+                    assert_eq!(view.scroll_handle.offset().y, px(0.0));
+                    assert_eq!(view.active_group_heading(0.0).unwrap().0, 0);
+                });
+                window.update_entity(&view, |view, cx| view.cycle_grouping(cx));
+                window.run_until_parked();
+            }
+            window.read_entity(&view, |view, _| {
+                assert_eq!(view.group_by, GroupBy::Kind);
+                assert_eq!(view.scroll_handle.offset().y, px(0.0));
+                assert_eq!(view.active_group_heading(0.0).unwrap().0, 0);
+                assert_eq!(view.row_entries(1).len(), 1);
+            });
+            assert!(
+                window
+                    .debug_bounds("checkbox-mark-row-section-select-0")
+                    .is_some()
+            );
+            assert!(window.debug_bounds("sticky-heading-0").is_none());
+        }
+    }
+
+    #[gpui::test]
+    fn grouped_rows_regroup_preserves_first_visible_item_through_listing_update(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (view, window) = grouped_rows_window(cx);
+        window.update_entity(&view, |view, cx| view.cycle_grouping(cx));
+        window.run_until_parked();
+        let (old_offset, key) = window.update_entity(&view, |view, cx| {
+            let index = view
+                .entries
+                .iter()
+                .position(|entry| entry.name == "b-04.txt")
+                .unwrap();
+            let row = view.entry_row(index).unwrap();
+            let offset = view.heights.offset_before(row) + 7.0;
+            view.scroll_handle
+                .set_offset(gpui::point(px(0.0), -px(offset)));
+            cx.notify();
+            (offset, view.entries[index].key.clone())
+        });
+        window.run_until_parked();
+        window.update_entity(&view, |view, cx| {
+            assert_eq!(view.scroll_handle.offset().y, -px(old_offset));
+            view.cycle_grouping(cx);
+            view.apply_listing(cx);
+        });
+        window.run_until_parked();
+        window.read_entity(&view, |view, _| {
+            let offset = -view.scroll_handle.offset().y.as_f32();
+            assert_ne!(offset, old_offset);
+            let row = view.heights.row_at_offset(offset);
+            let index = view.first_entry_in_row(row).unwrap();
+            assert_eq!(view.entries[index].key, key);
+            assert_eq!(view.heights.offset_before(row) - offset, -7.0);
+            assert_eq!(view.active_group_heading(offset).unwrap().0, 2);
+        });
+        assert!(window.debug_bounds("sticky-heading-2").is_some());
+    }
+
+    #[gpui::test]
+    fn grouped_rows_missing_anchor_returns_to_top(cx: &mut gpui::TestAppContext) {
+        let (view, window) = grouped_rows_window(cx);
+        window.update_entity(&view, |view, cx| {
+            let offset = view.heights.offset_before(5) + 7.0;
+            view.scroll_handle
+                .set_offset(gpui::point(px(0.0), -px(offset)));
+            cx.notify();
+        });
+        window.run_until_parked();
+        window.update_entity(&view, |view, cx| {
+            assert!(view.scroll_handle.offset().y < px(0.0));
+            let key = view.entries[5].key.clone();
+            view.cycle_grouping(cx);
+            let mut listing = view.entries.clone();
+            listing.retain(|entry| entry.key != key);
+            view.session.adopt_demo(Arc::new(listing));
+            view.apply_listing(cx);
+        });
+        window.run_until_parked();
+        window.read_entity(&view, |view, _| {
+            assert_eq!(view.scroll_handle.offset().y, px(0.0))
+        });
+    }
+
+    #[gpui::test]
+    fn grouped_rows_regroup_after_clamped_sort_is_independent_of_frame_timing(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let mut offsets = Vec::new();
+        for draw_between in [false, true] {
+            let (view, window) = grouped_rows_window(cx);
+            window.update_entity(&view, |view, cx| {
+                view.scroll_handle
+                    .set_offset(gpui::point(px(0.0), -px(7.0)));
+                view.toggle_sort(Column::Name, cx);
+                view.toggle_sort(Column::Name, cx);
+                if !draw_between {
+                    view.cycle_grouping(cx);
+                }
+            });
+            window.run_until_parked();
+            if draw_between {
+                window.read_entity(&view, |view, _| {
+                    assert_eq!(
+                        view.scroll_handle.offset().y,
+                        -view.scroll_handle.max_offset().y
+                    );
+                });
+                window.update_entity(&view, |view, cx| view.cycle_grouping(cx));
+                window.run_until_parked();
+            }
+            offsets.push(window.read_entity(&view, |view, _| view.scroll_handle.offset().y));
+        }
+        assert!(offsets[0] < -px(7.0));
+        assert_eq!(offsets[0], offsets[1]);
+    }
+
+    #[gpui::test]
+    fn grouped_rows_sticky_heading_switches_at_each_heading_top(cx: &mut gpui::TestAppContext) {
+        let (view, window) = grouped_rows_window(cx);
+        window.update_entity(&view, |view, cx| {
+            view.cycle_grouping(cx);
+            view.cycle_grouping(cx);
+        });
+        window.run_until_parked();
+        let headings = window.read_entity(&view, |view, _| {
+            assert_eq!(view.heading_rows, [0, 2, 14]);
+            view.heading_rows
+                .iter()
+                .map(|&row| (row, view.heights.offset_before(row)))
+                .collect::<Vec<_>>()
+        });
+        let overlays = ["sticky-heading-0", "sticky-heading-2", "sticky-heading-14"];
+        for (group, &(row, top)) in headings.iter().enumerate() {
+            for delta in [-1.0, 0.0, 1.0, GROUP_HEADING_HEIGHT] {
+                let offset = top + delta;
+                let active = if delta < 0.0 {
+                    group.checked_sub(1)
+                } else {
+                    Some(group)
+                };
+                if offset >= 0.0 {
+                    window.update_entity(&view, |view, cx| {
+                        view.scroll_handle
+                            .set_offset(gpui::point(px(0.0), -px(offset)));
+                        cx.notify();
+                    });
+                    window.run_until_parked();
+                    window.read_entity(&view, |view, _| {
+                        assert_eq!(view.scroll_handle.offset().y, -px(offset));
+                        assert_eq!(
+                            view.heights.row_height(row).unwrap().total(),
+                            GROUP_HEADING_HEIGHT
+                        );
+                    });
+                    for (i, overlay) in overlays.iter().enumerate() {
+                        let expected_height =
+                            (delta != 0.0 && active == Some(i)).then_some(px(if delta < 0.0 {
+                                1.0
+                            } else {
+                                GROUP_HEADING_HEIGHT
+                            }));
+                        assert_eq!(
+                            window
+                                .debug_bounds(overlay)
+                                .map(|bounds| bounds.size.height),
+                            expected_height,
+                            "heading row {row}, delta {delta}, overlay {overlay}"
+                        );
+                    }
+                }
+                window.read_entity(&view, |view, _| {
+                    assert_eq!(
+                        view.active_group_heading(offset).map(|(row, _)| row),
+                        active.map(|i| headings[i].0)
+                    );
+                });
+            }
+        }
+    }
+
+    struct GroupedGridHeightHarness {
+        view: gpui::Entity<DirectoryListDemo>,
+        checked: bool,
+    }
+
+    impl Render for GroupedGridHeightHarness {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            if self.checked {
+                return div();
+            }
+            self.view.update(cx, |view, cx| {
+                let width = 1920.0;
+                view.set_pane_width_projection(width, cx);
+                view.entries = (0..24)
+                    .map(|index| {
+                        let extension = if index < 12 {
+                            format!("single{index:02}")
+                        } else {
+                            "txt".to_owned()
+                        };
+                        let path = format!(
+                            "C:/grouped-grid-heights/long-filename-for-the-second-line-{index}.{extension}"
+                        );
+                        let mut entry = drag_test_entry(Some(&path), EntryKind::File, None);
+                        entry.modified = (index < 12).then_some(std::time::UNIX_EPOCH);
+                        entry
+                    })
+                    .collect();
+                view.rebuild_row_details();
+
+                for grouping in [GroupBy::Kind, GroupBy::ModifiedDate] {
+                    view.group_by = grouping;
+                    view.apply_group_order();
+                    for layout in [ViewLayout::Tiles, ViewLayout::Icons] {
+                        for scale in [0.75, 1.0, 1.25, 2.5] {
+                            view.layout = layout;
+                            view.icon_scale = scale;
+                            view.columns = layout.columns(width, scale, view.item_check_boxes);
+                            view.layout_width = width;
+                            view.reset_projected_rows();
+                            let rows = &view.projected_rows;
+                            if grouping == GroupBy::Kind {
+                                assert!(rows.iter().any(|row| {
+                                    matches!(row, ProjectedRow::CategoryStrip { .. })
+                                }));
+                            }
+                            assert!(rows.iter().any(|row| {
+                                matches!(row, ProjectedRow::Heading { .. })
+                            }));
+
+                            let mut rendered_bottom = 0.0;
+                            for row in 0..rows.len() {
+                                let top = view.heights.offset_before(row);
+                                let slot = view.heights.row_height(row).unwrap().content;
+                                let rendered_height = view
+                                    .render_group(row, false, "test", cx)
+                                    .into_any_element()
+                                    .layout_as_root(
+                                        size(
+                                            gpui::AvailableSpace::Definite(px(width)),
+                                            gpui::AvailableSpace::MaxContent,
+                                        ),
+                                        window,
+                                        cx,
+                                    )
+                                    .height
+                                    .as_f32();
+                                let case = format!("{layout:?} {grouping:?} {scale} row {row}");
+                                assert_eq!(top, rendered_bottom, "{case}");
+                                assert_eq!(slot, rendered_height, "{case}");
+                                rendered_bottom = top + rendered_height;
+                            }
+                            assert_eq!(view.heights.total_height(), rendered_bottom);
+                            let (_, measured_rows) = view.prepare_layout(window, cx);
+                            if !verify_row_heights() {
+                                assert_eq!(measured_rows, 0);
+                            }
+                            assert_eq!(view.heights.total_height(), rendered_bottom);
+                        }
+                    }
+                }
+            });
+            self.checked = true;
+            div()
+        }
+    }
+
+    #[gpui::test]
+    fn grouped_grid_row_slots_match_rendered_heights_on_the_first_layout(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (harness, visual) = cx.add_window_view(|_, cx| GroupedGridHeightHarness {
+            view: cx.new(|cx| {
+                DirectoryListDemo::new_at(std::sync::Arc::new(input::KeymapRuntime::new()), None, cx)
+            }),
+            checked: false,
+        });
+        assert!(visual.read_entity(&harness, |harness, _| harness.checked));
     }
 
     #[gpui::test]
@@ -18379,6 +18729,12 @@ fn main() {
                     .restore
                     .as_ref()
                     .is_none_or(|snapshot| snapshot.item_check_boxes),
+            ));
+            cx.set_global(AlternateRowColors(
+                startup
+                    .restore
+                    .as_ref()
+                    .is_none_or(|snapshot| snapshot.alternate_row_colors),
             ));
             cx.set_global(window_coordinator::WindowCoordinator::default());
             cx.global_mut::<persistence::SessionAutosaveOwner>()

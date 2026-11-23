@@ -115,7 +115,7 @@ enum Status {
     Applying,
     Ready(VersionDir),
     UpToDate,
-    Failed(String),
+    Failed(io::Error),
 }
 
 struct Updater {
@@ -185,7 +185,7 @@ pub(crate) fn start(cx: &mut App) {
                     updater.settings = settings;
                     updater.status = Status::Idle;
                 }
-                Err(error) => updater.status = Status::Failed(error.to_string()),
+                Err(error) => updater.status = Status::Failed(error),
             }
             cx.refresh_windows();
         });
@@ -312,7 +312,7 @@ pub(crate) fn check(request: Check, cx: &mut App) {
                 }
                 Ok(None) if !automatic => Status::UpToDate,
                 Ok(None) => Status::Idle,
-                Err(error) => Status::Failed(error.to_string()),
+                Err(error) => Status::Failed(error),
             };
             cx.refresh_windows();
         });
@@ -352,7 +352,7 @@ pub(crate) fn toggle_automatic(cx: &mut App) {
                     updater.settings = settings;
                     updater.status = previous;
                 }
-                Err(error) => updater.status = Status::Failed(error.to_string()),
+                Err(error) => updater.status = Status::Failed(error),
             }
             cx.refresh_windows();
         });
@@ -396,7 +396,19 @@ pub(crate) fn notice(translator: &Translator, cx: &App) -> Option<Notice> {
             false,
         ),
         Status::UpToDate => (Message::UpdateUpToDate, String::new(), None, true),
-        Status::Failed(error) => (Message::UpdateFailed, error.clone(), None, true),
+        Status::Failed(error)
+            if error
+                .get_ref()
+                .is_some_and(|cause| cause.is::<source::UpdateInformationError>()) =>
+        {
+            (
+                Message::UpdateInformationUnreadable,
+                String::new(),
+                None,
+                true,
+            )
+        }
+        Status::Failed(error) => (Message::UpdateFailed, error.to_string(), None, true),
     };
     let text = translator
         .text(message)
@@ -468,7 +480,7 @@ pub(crate) fn act(action: NoticeAction, generation: u64, cx: &mut App) -> Option
         cx.update(|cx| {
             cx.global_mut::<Updater>().status = match result {
                 Ok(version) => Status::Ready(version),
-                Err(error) => Status::Failed(error.to_string()),
+                Err(error) => Status::Failed(error),
             };
             cx.refresh_windows();
         });

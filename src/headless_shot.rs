@@ -24,6 +24,7 @@ type ShotResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 const STEP_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
+const STABLE_LAYOUT_FRAMES: usize = 3;
 const DEFAULT_SIZE: (u32, u32) = (1280, 800);
 
 pub(super) struct DisplayRoot(PathBuf);
@@ -111,6 +112,10 @@ enum Step {
     },
     View {
         mode: ViewMode,
+    },
+    CycleGrouping,
+    IconScale {
+        scale: f32,
     },
     Screenshot {
         name: String,
@@ -320,7 +325,7 @@ impl Runner {
                 }
                 cx.background_executor().timer(duration).await;
             }
-            Step::WaitIdle { entry } => self.wait_idle(cx, until, entry.as_deref()).await?,
+            Step::WaitIdle { entry } => self.wait_idle(cx, until, entry.as_deref(), false).await?,
             Step::Navigate {
                 destination: NavigateDestination::Fixture { path },
             } => {
@@ -369,7 +374,7 @@ impl Runner {
                 self.capture_hover.set(true);
             }
             Step::Select { name } => {
-                self.wait_idle(cx, until, None).await?;
+                self.wait_idle(cx, until, None, false).await?;
                 let found = self.with_active_view(cx, |view, window, cx| {
                     let Some(index) = view.entries.iter().position(|entry| entry.name == name)
                     else {
@@ -401,17 +406,27 @@ impl Runner {
                 self.with_active_view(cx, |view, _, cx| view.set_layout(layout, cx))?;
                 self.frames(cx, until).await?;
             }
+            Step::CycleGrouping => {
+                self.with_active_view(cx, |view, _, cx| view.cycle_grouping(cx))?;
+                self.frames(cx, until).await?;
+            }
+            Step::IconScale { scale } => {
+                if !(crate::ICON_SCALE_MIN..=crate::ICON_SCALE_MAX).contains(&scale) {
+                    return Err(format!("icon scale out of range: {scale}").into());
+                }
+                self.with_active_view(cx, |view, _, cx| {
+                    view.icon_scale = scale;
+                    view.layout_width = 0.0;
+                    cx.notify();
+                })?;
+                self.frames(cx, until).await?;
+            }
             Step::Screenshot { name } => {
                 let capture_hover = self.capture_hover.take();
                 if !capture_hover {
                     self.clear_hover(cx)?;
                 }
-                self.wait_idle(cx, until, None).await?;
-                wait_until(cx, until, "visible thumbnails", |cx| {
-                    self.with_active_view(cx, |view, _, _| !view.shot_previews_pending)
-                })
-                .await?;
-                self.frames(cx, until).await?;
+                self.wait_idle(cx, until, None, true).await?;
                 let target =
                     self.window(cx, |window, _| capture::Target::from_window(window))??;
                 let output = self.output.join(format!("{name}.png"));
@@ -471,41 +486,80 @@ impl Runner {
         cx: &mut AsyncApp,
         until: Instant,
         entry: Option<&str>,
+        include_previews: bool,
     ) -> ShotResult<()> {
         let reason = entry.map_or_else(
-            || "directory enumeration".to_owned(),
-            |name| format!("directory entry {name:?}"),
+            || {
+                if include_previews {
+                    "directory layout and visible thumbnails".to_owned()
+                } else {
+                    "directory layout".to_owned()
+                }
+            },
+            |name| format!("directory layout with entry {name:?}"),
         );
-        wait_until(cx, until, &reason, |cx| {
-            self.with_active_view(cx, |view, _, _| {
+        let mut previous = None;
+        let mut consecutive = 0;
+        while Instant::now() < until {
+            self.next_frame(cx, until).await?;
+            let geometry = self.with_active_view(cx, |view, _, cx| -> ShotResult<_> {
                 let status = view.session.status();
                 if let Some(error) = status.error() {
                     return Err(format!("directory enumeration failed: {error}").into());
                 }
                 // PC の session は、XDG の行が届く前に Ready になりうる。
-                Ok(!status.is_loading()
+                let ready = !status.is_loading()
                     && (!view.is_this_pc() || view.pc_base_sources_complete)
                     && view.pending_rename_geometry.is_none()
                     && view.pending_rename_tab.is_none()
-                    && entry.is_none_or(|name| view.entries.iter().any(|entry| entry.name == name)))
-            })?
-        })
-        .await?;
-        self.frames(cx, until).await
+                    && view.pending_projection_anchor.is_none()
+                    && view.layout_width > 0.0
+                    && !view.viewport_reconcile_scheduled.get()
+                    && view.visible_range().all(|row| view.measured[row])
+                    && (!include_previews || !view.shot_previews_pending)
+                    && entry.is_none_or(|name| view.entries.iter().any(|entry| entry.name == name));
+                Ok(ready.then(|| {
+                    (
+                        cx.entity().entity_id(),
+                        view.presentation_revision,
+                        view.layout_width,
+                        view.columns,
+                        view.scroll_handle.bounds(),
+                        view.scroll_handle.offset(),
+                        view.scroll_handle.max_offset(),
+                        view.heights.total_height(),
+                    )
+                }))
+            })??;
+            consecutive = match &geometry {
+                None => 0,
+                Some(_) if geometry == previous => consecutive + 1,
+                Some(_) => 1,
+            };
+            if consecutive == STABLE_LAYOUT_FRAMES {
+                return Ok(());
+            }
+            previous = geometry;
+        }
+        Err(format!("timed out waiting for {reason}").into())
     }
 
     async fn frames(&self, cx: &mut AsyncApp, until: Instant) -> ShotResult<()> {
         // prepaint で viewport が確定してから発生する再描画まで待つ。
         for _ in 0..3 {
-            let arrived = Rc::new(Cell::new(false));
-            let signal = arrived.clone();
-            self.window(cx, |window, _| {
-                window.refresh();
-                window.on_next_frame(move |_, _| signal.set(true));
-            })?;
-            wait_until(cx, until, "presenting a frame", |_| Ok(arrived.get())).await?;
+            self.next_frame(cx, until).await?;
         }
         Ok(())
+    }
+
+    async fn next_frame(&self, cx: &mut AsyncApp, until: Instant) -> ShotResult<()> {
+        let arrived = Rc::new(Cell::new(false));
+        let signal = arrived.clone();
+        self.window(cx, |window, _| {
+            window.refresh();
+            window.on_next_frame(move |_, _| signal.set(true));
+        })?;
+        wait_until(cx, until, "presenting a frame", |_| Ok(arrived.get())).await
     }
 }
 

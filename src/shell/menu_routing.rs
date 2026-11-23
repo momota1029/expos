@@ -979,6 +979,15 @@ impl FilerShell {
                     .try_global::<crate::ItemCheckBoxes>()
                     .is_none_or(|setting| setting.0),
             });
+            rows.push(menu::Entry {
+                action: ActionId::new(input::TOGGLE_ALTERNATE_ROW_COLORS),
+                label: self
+                    .translator
+                    .text(i18n::Message::AlternateRowColors)
+                    .into_owned(),
+                enabled: true,
+                checked: cx.global::<crate::AlternateRowColors>().0,
+            });
         }
         if matches!(open, menu::Open::Popup(_)) {
             // Context menus list only actions that the captured target can run now.
@@ -1030,12 +1039,10 @@ impl FilerShell {
         {
             rows.push(menu::Row::Leaf(show_hidden));
         }
-        if let Some(item_check_boxes) = entries
-            .iter()
-            .find(|entry| entry.action.as_str() == input::TOGGLE_ITEM_CHECK_BOXES)
-            .cloned()
-        {
-            rows.push(menu::Row::Leaf(item_check_boxes));
+        for action in [input::TOGGLE_ITEM_CHECK_BOXES, input::TOGGLE_ALTERNATE_ROW_COLORS] {
+            if let Some(entry) = entries.iter().find(|entry| entry.action.as_str() == action) {
+                rows.push(menu::Row::Leaf(entry.clone()));
+            }
         }
         rows
     }
@@ -1949,6 +1956,17 @@ impl FilerShell {
         {
             self.leave_menu(cx);
             cx.update_global::<crate::ItemCheckBoxes, _>(|setting, _| {
+                setting.0 = !setting.0;
+            });
+            self.save_requested = true;
+            cx.notify();
+            return;
+        }
+        if action.as_str() == input::TOGGLE_ALTERNATE_ROW_COLORS
+            && self.menu.open() == Some(menu::Open::Menu(menu::Menu::View))
+        {
+            self.leave_menu(cx);
+            cx.update_global::<crate::AlternateRowColors, _>(|setting, _| {
                 setting.0 = !setting.0;
             });
             self.save_requested = true;

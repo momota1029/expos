@@ -1673,6 +1673,7 @@ pub(crate) struct FilerShell {
     _window_bounds: Option<gpui::Subscription>,
     show_hidden_items_subscription: Option<gpui::Subscription>,
     item_check_boxes_subscription: Option<gpui::Subscription>,
+    alternate_row_colors_subscription: Option<gpui::Subscription>,
     archive_provider_subscription: Option<gpui::Subscription>,
     /// menu の状態。
     menu: menu::MenuBar,
@@ -2540,6 +2541,14 @@ impl FilerShell {
                     .is_none_or(|snapshot| snapshot.item_check_boxes),
             ));
         }
+        if !cx.has_global::<crate::AlternateRowColors>() {
+            cx.set_global(crate::AlternateRowColors(
+                startup
+                    .restore
+                    .as_ref()
+                    .is_none_or(|snapshot| snapshot.alternate_row_colors),
+            ));
+        }
         let headless = initial_directory.is_some();
         let language_override =
             LanguageOverride::startup(!headless && i18n::pseudo_startup_requested());
@@ -2637,6 +2646,7 @@ impl FilerShell {
             _window_bounds: None,
             show_hidden_items_subscription: None,
             item_check_boxes_subscription: None,
+            alternate_row_colors_subscription: None,
             archive_provider_subscription: None,
             menu: menu::MenuBar::default(),
             menu_scroll: ScrollHandle::new(),
@@ -2744,6 +2754,11 @@ impl FilerShell {
         );
         shell.item_check_boxes_subscription =
             Some(cx.observe_global::<crate::ItemCheckBoxes>(|shell, cx| {
+                shell.save_requested = true;
+                cx.notify();
+            }));
+        shell.alternate_row_colors_subscription =
+            Some(cx.observe_global::<crate::AlternateRowColors>(|shell, cx| {
                 shell.save_requested = true;
                 cx.notify();
             }));
@@ -12707,6 +12722,7 @@ impl FilerShell {
         aggregate.item_check_boxes = cx
             .try_global::<crate::ItemCheckBoxes>()
             .is_none_or(|setting| setting.0);
+        aggregate.alternate_row_colors = cx.global::<crate::AlternateRowColors>().0;
         if let Some(settings) = active_settings {
             aggregate.select_extension_on_rename = settings.select_extension_on_rename;
             aggregate.theme_name = settings.theme_name;
@@ -12884,6 +12900,7 @@ impl FilerShell {
             select_extension_on_rename: self.select_extension_on_rename,
             show_hidden_items: cx.global::<crate::show_hidden_items::ShowHiddenItems>().0,
             item_check_boxes: cx.global::<crate::ItemCheckBoxes>().0,
+            alternate_row_colors: cx.global::<crate::AlternateRowColors>().0,
             theme_name: self.selected_theme.clone(),
             language_override: self.language_override.persisted().into(),
             clean_shutdown,
@@ -12969,6 +12986,7 @@ impl FilerShell {
         aggregate.item_check_boxes = cx
             .try_global::<crate::ItemCheckBoxes>()
             .is_none_or(|setting| setting.0);
+        aggregate.alternate_row_colors = cx.global::<crate::AlternateRowColors>().0;
         if let Some(settings) = active_settings {
             aggregate.select_extension_on_rename = settings.select_extension_on_rename;
             aggregate.theme_name = settings.theme_name;
@@ -22067,7 +22085,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn show_hidden_view_command_updates_the_shared_setting_seen_by_each_window(
+    fn view_display_commands_update_shared_settings_seen_by_each_window(
         cx: &mut gpui::TestAppContext,
     ) {
         initialize_directory_binding_test_globals(cx);
@@ -22137,34 +22155,34 @@ mod tests {
         });
         assert_eq!(checked, Some(true));
 
-        first_window.update(|window, cx| {
-            first_shell.update(cx, |shell, cx| {
-                shell.menu.show_menu(menu::Menu::View);
-                shell.run_menu_command_at(
-                    gpui_filer_input::ActionId::new(input::TOGGLE_ITEM_CHECK_BOXES),
-                    None,
-                    window,
-                    cx,
-                );
+        for action in [input::TOGGLE_ITEM_CHECK_BOXES, input::TOGGLE_ALTERNATE_ROW_COLORS] {
+            first_window.update(|window, cx| {
+                first_shell.update(cx, |shell, cx| {
+                    shell.menu.show_menu(menu::Menu::View);
+                    shell.run_menu_command_at(
+                        gpui_filer_input::ActionId::new(action),
+                        None,
+                        window,
+                        cx,
+                    );
+                    assert!(shell.save_requested);
+                });
             });
-        });
-        let item_check_boxes_checked = second_window.update(|_window, cx| {
-            second_shell.update(cx, |shell, cx| {
-                shell.menu.show_menu(menu::Menu::View);
-                shell
-                    .view_menu_root_rows(cx)
-                    .into_iter()
-                    .find_map(|row| match row {
-                        menu::Row::Leaf(entry)
-                            if entry.action.as_str() == input::TOGGLE_ITEM_CHECK_BOXES =>
-                        {
-                            Some(entry.checked)
+            second_window.update(|_window, cx| {
+                second_shell.update(cx, |shell, cx| {
+                    shell.menu.show_menu(menu::Menu::View);
+                    let checked = shell.view_menu_root_rows(cx).into_iter().find_map(|row| {
+                        match row {
+                            menu::Row::Leaf(entry) if entry.action.as_str() == action => {
+                                Some(entry.checked)
+                            }
+                            _ => None,
                         }
-                        _ => None,
-                    })
-            })
-        });
-        assert_eq!(item_check_boxes_checked, Some(false));
+                    });
+                    assert_eq!(checked, Some(false));
+                });
+            });
+        }
     }
 
     #[gpui::test]
@@ -78921,6 +78939,7 @@ fn ordinary_trash_shell_writer_child_crash_before_terminal_upsert(cx: &mut gpui:
             select_extension_on_rename: false,
             show_hidden_items: false,
             item_check_boxes: true,
+            alternate_row_colors: true,
             theme_name: "default".into(),
             language_override: "auto".into(),
             clean_shutdown: true,

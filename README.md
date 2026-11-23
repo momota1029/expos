@@ -5,6 +5,7 @@ expos is a Windows file manager built with Rust and GPUI. This beta provides dir
 Press **/** to search filenames in the current folder. Matches are highlighted in the file list. The titlebar search button opens Everything Search on Windows and in-folder Quick Search on Linux. Everything Search requires Everything to be running.
 
 Rows keeps filenames on one line and shows the full name on hover. As the pane narrows, Rows hides Kind, Date modified, and Size in that order, then restores them as space returns.
+Rows alternates item background colors by default. Toggle it under **View → Alternate row colors**.
 
 In Quick Preview, the header shows the filename. Close it with the header's close button or **Escape**.
 

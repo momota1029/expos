@@ -44,6 +44,7 @@ type CheckboxListener = Box<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App)>;
 /// チェックボックスのhit領域の幅と通常の高さ。外側のレイアウトもこれを基準にする。
 pub const CHECKBOX_HIT_SIZE: f32 = 44.0;
 pub const CHECKBOX_COMPACT_HEIGHT: f32 = 36.0;
+pub const CHECKBOX_MARK_SIZE: f32 = 18.0;
 
 /// チェックボックスの見える箱を、44pxのhit領域のどこへ寄せるか。
 ///
@@ -55,6 +56,8 @@ pub enum CheckboxAlign {
     Center,
     /// hit領域の右端（グリッド。箱を右隣の内容へ寄せ、空白は左へ逃がす）
     Trailing,
+    /// 左上に重ねる場合、余った hit 領域を画像の外側へ逃がす。
+    BottomTrailing,
 }
 
 /// 行とタイルで共用するチェックボックス。選択状態は親が所有する。
@@ -90,6 +93,11 @@ impl SelectionCheckbox {
         self
     }
 
+    pub fn bottom_trailing(mut self) -> Self {
+        self.align = CheckboxAlign::BottomTrailing;
+        self
+    }
+
     /// 低い見出しに収めても、横方向の hit 領域は 44px を保つ。
     pub fn compact(mut self) -> Self {
         self.hit_height = CHECKBOX_COMPACT_HEIGHT;
@@ -108,7 +116,8 @@ impl RenderOnce for SelectionCheckbox {
         use gpui::{InteractiveElement as _, StatefulInteractiveElement as _};
         let palette = theme_palette(cx);
         let mut mark = div()
-            .size(px(18.0))
+            .debug_selector(|| format!("checkbox-mark-{}", self.id))
+            .size(px(CHECKBOX_MARK_SIZE))
             .flex()
             .items_center()
             .justify_center()
@@ -145,12 +154,10 @@ impl RenderOnce for SelectionCheckbox {
             .h(px(self.hit_height))
             .flex_shrink_0()
             .flex()
-            .items_center()
-            .when(self.align == CheckboxAlign::Trailing, |hit| {
-                hit.justify_end()
-            })
-            .when(self.align == CheckboxAlign::Center, |hit| {
-                hit.justify_center()
+            .map(|hit| match self.align {
+                CheckboxAlign::Center => hit.items_center().justify_center(),
+                CheckboxAlign::Trailing => hit.items_center().justify_end(),
+                CheckboxAlign::BottomTrailing => hit.items_end().justify_end(),
             })
             .child(mark)
             .on_click(move |event, window, cx| {

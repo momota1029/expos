@@ -1,0 +1,23 @@
+{
+  "comment": "詳細ビューの交互色を、種類グループの境界、選択行、スクロール後の位置で撮影する。",
+  "steps": [
+    {"action": "size", "width": 1280, "height": 800},
+    {"action": "view", "mode": "rows"},
+    {"action": "wait_idle"},
+    {"action": "cycle_grouping"},
+    {"action": "wait_idle"},
+    {"action": "cycle_grouping"},
+    {"action": "wait_idle"},
+    {"action": "select", "name": "projects"},
+    {"action": "wait_idle"},
+    {"action": "theme", "theme": "light"},
+    {"action": "screenshot", "name": "rows-stripes-top-light"},
+    {"action": "theme", "theme": "dark"},
+    {"action": "screenshot", "name": "rows-stripes-top-dark"},
+    {"action": "key", "keys": "end"},
+    {"action": "wait_idle"},
+    {"action": "screenshot", "name": "rows-stripes-scrolled-dark"},
+    {"action": "theme", "theme": "light"},
+    {"action": "screenshot", "name": "rows-stripes-scrolled-light"}
+  ]
+}

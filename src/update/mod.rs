@@ -13,6 +13,12 @@ pub(crate) mod ui;
 
 use selection::Offer;
 
+const UTF8_BOM: &[u8] = b"\xef\xbb\xbf";
+
+fn without_utf8_bom(bytes: &[u8]) -> &[u8] {
+    bytes.strip_prefix(UTF8_BOM).unwrap_or(bytes)
+}
+
 fn ordinary_file(path: &Path) -> io::Result<bool> {
     Ok(ordinary_metadata(path)?.is_some_and(|meta| meta.is_file()))
 }

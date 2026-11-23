@@ -1,6 +1,54 @@
 use super::*;
 use std::ops::Range;
 
+fn icon_checkbox_hit_origin(
+    icon_box: f32,
+    icon_size: f32,
+    image_size: Option<gpui::Size<gpui::DevicePixels>>,
+) -> gpui::Point<Pixels> {
+    let padding = px((icon_box - icon_size) / 2.0);
+    let bounds = Bounds {
+        origin: gpui::point(padding, padding),
+        size: size(px(icon_size), px(icon_size)),
+    };
+    let media = image_size.map_or(bounds, |image_size| {
+        gpui::ObjectFit::Contain.get_bounds(bounds, image_size)
+    });
+    media.origin - gpui::point(px(ICON_CHECKBOX_HIT_OFFSET), px(ICON_CHECKBOX_HIT_OFFSET))
+}
+
+fn row_background(
+    index: usize,
+    alternate: bool,
+    palette: gpui_filer_ui::ThemePalette,
+    hovered: bool,
+    selected: bool,
+    focused: bool,
+) -> (Option<gpui::Rgba>, gpui::Rgba) {
+    let hover = if selected {
+        palette.selection_hover_bg
+    } else {
+        palette.hover_bg
+    };
+    let background = match (hovered, selected, focused) {
+        (true, _, _) => Some(hover),
+        (_, true, true) => Some(palette.selection_focus_bg),
+        (_, true, false) => Some(palette.selection_bg),
+        (_, false, true) => Some(palette.focus_bg),
+        // entries の index はグループ見出しを含まず、スクロールしても変わらない。
+        _ if alternate && index % 2 == 1 => {
+            let alpha = if Hsla::from(palette.surface_base).l < 0.5 {
+                0.04
+            } else {
+                0.03
+            };
+            Some(palette.text.opacity(alpha))
+        }
+        _ => None,
+    };
+    (background, hover)
+}
+
 struct RowNameTooltip(SharedString);
 
 fn quick_search_match_range(name: &str, needle: &str) -> Option<Range<usize>> {
@@ -183,7 +231,7 @@ impl gpui::RenderOnce for GridFilename {
         let text = self.text(window, cx);
         div()
             .max_w(self.width)
-            .max_h(px(NAME_LINE_HEIGHT * 2.0))
+            .max_h(px(NAME_LINE_HEIGHT * GRID_NAME_LINES))
             .overflow_hidden()
             .whitespace_nowrap()
             .child(match self.tooltip {
@@ -358,10 +406,10 @@ impl DirectoryListDemo {
                     cx.notify();
                 }),
             );
-            if self.layout == ViewLayout::Tiles {
-                checkbox.trailing().into_any_element()
-            } else {
-                checkbox.into_any_element()
+            match self.layout {
+                ViewLayout::Rows => checkbox.into_any_element(),
+                ViewLayout::Tiles => checkbox.trailing().into_any_element(),
+                ViewLayout::Icons => checkbox.bottom_trailing().into_any_element(),
             }
         };
         let checkbox = if self.item_check_boxes && !measuring && self.layout != ViewLayout::Icons {
@@ -382,7 +430,7 @@ impl DirectoryListDemo {
             .id(("row-drag", index))
             .debug_selector(|| format!("external-drop-row-{index}"))
             .w_full()
-            .min_h(px(44.0))
+            .min_h(px(ESTIMATED_ROW_HEIGHT))
             .flex_shrink_0()
             .flex()
             .items_center()
@@ -843,32 +891,29 @@ impl DirectoryListDemo {
                         .and_then(|drag| self.rectangle_content_rect(drag))
                         .is_some_and(|rectangle| self.item_intersects_rectangle(index, rectangle)),
                 );
+                // 通常モードでは選択色がフォーカスを示す。選択モードでは別の項目を指せる。
                 let focused =
                     self.selection.is_selection_mode() && self.selection.focused() == Some(index);
                 let hovered = self.interaction.hover_enabled()
                     && self
                         .hovered_item_part
                         .is_some_and(|(item, _)| item == index);
-                let palette = gpui_filer_ui::theme_palette(cx);
-                let hover_color = if selected {
-                    palette.selection_hover_bg
-                } else {
-                    palette.hover_bg
+                let (color, hover_color) = row_background(
+                    index,
+                    cx.try_global::<AlternateRowColors>()
+                        .is_none_or(|setting| setting.0),
+                    gpui_filer_ui::theme_palette(cx),
+                    hovered,
+                    selected,
+                    focused,
+                );
+                let paint_cell = |cell: gpui::Div| {
+                    cell.when_some(color, |cell, color| cell.bg(color))
+                        .group_hover(folder_tree_group.clone(), |cell| cell.bg(hover_color))
                 };
-                let color = match (hovered, selected, focused) {
-                    (true, _, _) => Some(hover_color),
-                    (_, true, true) => Some(palette.selection_focus_bg),
-                    (_, true, false) => Some(palette.selection_bg),
-                    (_, false, true) => Some(palette.focus_bg),
-                    _ => None,
-                };
-                let paint_side = |side: gpui::Div| {
-                    side.when_some(color, |side, color| side.bg(color))
-                        .group_hover(folder_tree_group.clone(), |side| side.bg(hover_color))
-                };
-                leading = paint_side(leading);
-                trailing = paint_side(trailing);
-                name = name.group_hover(folder_tree_group, |name| name.bg(hover_color));
+                leading = paint_cell(leading);
+                trailing = paint_cell(trailing);
+                name = paint_cell(name).hover(move |style| style.bg(hover_color));
             }
             let mut past_name = false;
             for (position, column) in columns.visible_columns().enumerate() {
@@ -1008,49 +1053,39 @@ impl DirectoryListDemo {
             // 見本の候補がないフォルダーは、通常のフォルダーアイコンだけで示す。
             .filter(|message| *message != Message::ThumbnailFolderNoPreview)
             .map(|message| self.translator.text(message).into_owned());
-        let shell_visual = shell_icon_image.as_ref().map(|image| {
-            gpui::img(image.clone())
-                .size(px(icon_size))
-                .object_fit(gpui::ObjectFit::Contain)
-                .rounded(px(RADIUS_SM))
-                .into_any_element()
-        });
-        let preview_visual = entry
+        let preview_images = entry
             .path
             .as_ref()
+            .filter(|_| !measuring && !is_ico)
             .and_then(|path| match self.previews.get(path) {
                 // 世代が進んでいても、新しい画像が届くまでは前のものを出す。
                 // 再要求は `prepare_previews` が済ませている。
                 Some(PreviewState::Ready { images, .. }) if !images.is_empty() => Some(images),
                 _ => None,
-            })
-            .map(|images| {
-                if matches!(entry.kind, EntryKind::Folder) {
-                    gpui_filer_ui::FolderPreview::new(images.clone(), icon_size).into_any_element()
-                } else {
-                    // 画像は角丸を持たないので、コンテナの角丸で切る。
-                    // 他のアイコンと形が揃う。
-                    gpui::img(images[0].clone())
-                        .size(px(icon_size))
-                        .object_fit(gpui::ObjectFit::Contain)
-                        .rounded(px(RADIUS_SM))
-                        .into_any_element()
-                }
             });
+        let folder_preview = preview_images.filter(|_| matches!(entry.kind, EntryKind::Folder));
+        let media_image = if folder_preview.is_some() {
+            None
+        } else {
+            preview_images
+                .map(|images| &images[0])
+                .or(shell_icon_image.as_ref())
+        };
         let visual = if measuring {
             div().size(px(icon_size)).into_any_element()
+        } else if let Some(images) = folder_preview {
+            gpui_filer_ui::FolderPreview::new(images.clone(), icon_size).into_any_element()
+        } else if let Some(image) = media_image {
+            gpui::img(image.clone())
+                .size(px(icon_size))
+                .object_fit(gpui::ObjectFit::Contain)
+                .rounded(px(RADIUS_SM))
+                .into_any_element()
         } else {
-            let preferred_visual = if is_ico {
-                shell_visual
-            } else {
-                preview_visual.or(shell_visual)
-            };
-            preferred_visual.unwrap_or_else(|| {
-                Icon::new(self.entry_icon(entry))
-                    .size(px(icon_size))
-                    .color(foreground)
-                    .into_any_element()
-            })
+            Icon::new(self.entry_icon(entry))
+                .size(px(icon_size))
+                .color(foreground)
+                .into_any_element()
         };
         let visual_surface = div()
             .relative()
@@ -1121,7 +1156,8 @@ impl DirectoryListDemo {
             .max_w_full()
             .when(renaming && icons, |label| label.w_full())
             .when(renaming && !icons, |label| label.flex_1())
-            .min_h(px(44.0))
+            .min_h(px(GRID_LABEL_HEIGHT))
+            .when(!renaming, |label| label.h(px(GRID_LABEL_HEIGHT)))
             .px(px(GRID_NAME_PADDING_X))
             .flex()
             .when(icons && !renaming, |label| {
@@ -1182,11 +1218,18 @@ impl DirectoryListDemo {
                     });
                     geometry.occluding_surfaces.push(bounds.clone());
                 }
-                // 44pxのhit領域を左へ逃がし、最小ズームでもアイコン中央を操作できる。
+                // 描画と同じ Contain で画像の端を求める。44px の hit 領域は左上へ
+                // 逃がし、最小ズームでもアイコン中央を操作できる。
+                let hit_origin = icon_checkbox_hit_origin(
+                    icon_box,
+                    icon_size,
+                    media_image.map(|image| image.size(0)),
+                );
                 let overlay = div()
                     .absolute()
-                    .left(px(-ICON_CHECKBOX_OVERHANG))
-                    .top_0()
+                    .left(hit_origin.x)
+                    .top(hit_origin.y)
+                    .debug_selector(|| format!("icon-checkbox-hit-{index}"))
                     .size(px(gpui_filer_ui::CHECKBOX_HIT_SIZE))
                     .block_mouse_except_scroll()
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -1230,7 +1273,7 @@ impl DirectoryListDemo {
             .id(id)
             .relative()
             .w_full()
-            .h(px(gpui_filer_ui::CHECKBOX_COMPACT_HEIGHT))
+            .h(px(GROUP_HEADING_HEIGHT))
             .flex_shrink_0()
             .flex()
             .items_center()
@@ -1257,6 +1300,22 @@ impl DirectoryListDemo {
             .text_color(palette.text_muted)
     }
 
+    fn group_checkbox_padding(&self, grid_inset: f32) -> f32 {
+        let centered_mark =
+            (gpui_filer_ui::CHECKBOX_HIT_SIZE - gpui_filer_ui::CHECKBOX_MARK_SIZE) / 2.0;
+        match self.layout {
+            ViewLayout::Rows => ROW_PADDING_X,
+            ViewLayout::Tiles => grid_inset + centered_mark,
+            ViewLayout::Icons => {
+                // 縦長画像でずれないよう、見出しは先頭列の正方形のアイコン位置に揃える。
+                let icon_size = self.layout.icon_size(self.icon_scale);
+                let cell_width = self.grid_cell_width(self.layout_width);
+                (grid_inset + (cell_width - icon_size) / 2.0 + ICON_CHECKBOX_INSET - centered_mark)
+                    .max(0.0)
+            }
+        }
+    }
+
     pub(super) fn render_group_with_preview_size(
         &self,
         row: usize,
@@ -1267,6 +1326,7 @@ impl DirectoryListDemo {
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let palette = gpui_filer_ui::theme_palette(cx);
+        let (pad_top, pad_bottom) = self.layout.grid_row_padding_y();
         if let Some(ProjectedRow::CategoryStrip { groups, .. }) = self.projected_rows.get(row) {
             let mut strip = div()
                 .id(format!("{id_scope}-category-strip-{row}"))
@@ -1274,8 +1334,7 @@ impl DirectoryListDemo {
                 .flex()
                 .items_start()
                 .gap(px(16.0))
-                .px(px(12.0))
-                .pb(px(16.0));
+                .px(px(12.0));
             for (column, category) in groups.iter().enumerate() {
                 let index = category.index;
                 let state = self.selection.range_selection_state(index, index + 1);
@@ -1294,23 +1353,21 @@ impl DirectoryListDemo {
                 .compact()
                 .indeterminate(state == RangeSelectionState::Some);
                 let focused = matches!(self.selection.focus_target(), Some(FocusTarget::Section(focused)) if focused == &category.key);
-                // 見出しを短くしても、項目の開始位置とキー移動の境界は保つ。
-                let heading = div()
-                    .id(format!("{id_scope}-category-heading-{row}-{column}"))
-                    .w_full()
-                    .h(px(gpui_filer_ui::CHECKBOX_HIT_SIZE))
-                    .child(
-                        Self::group_heading("heading-label", palette, focused)
-                            .px(px(4.0))
-                            .gap(px(6.0))
-                            .child(checkbox)
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .child(format!("{} (1)", category.label)),
-                            ),
-                    );
+                let heading = Self::group_heading(
+                    format!("{id_scope}-category-heading-{row}-{column}"),
+                    palette,
+                    focused,
+                )
+                .pl(px(self.group_checkbox_padding(0.0)))
+                .pr(px(4.0))
+                .gap(px(6.0))
+                .child(checkbox)
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .child(format!("{} (1)", category.label)),
+                );
                 let heading = if measuring {
                     heading
                 } else {
@@ -1336,6 +1393,17 @@ impl DirectoryListDemo {
                             cx.stop_propagation();
                         }))
                 };
+                let item = div()
+                    .pt(px(pad_top))
+                    .pb(px(pad_bottom))
+                    .child(self.render_entry(
+                        index,
+                        palette.text.into(),
+                        measuring,
+                        preview_size,
+                        scale_factor,
+                        cx,
+                    ));
                 strip = strip.child(
                     div()
                         .flex_1()
@@ -1343,14 +1411,7 @@ impl DirectoryListDemo {
                         .flex()
                         .flex_col()
                         .child(heading)
-                        .child(self.render_entry(
-                            index,
-                            palette.text.into(),
-                            measuring,
-                            preview_size,
-                            scale_factor,
-                            cx,
-                        )),
+                        .child(item),
                 );
             }
             for _ in groups.len()..self.columns {
@@ -1388,7 +1449,8 @@ impl DirectoryListDemo {
                 palette,
                 focused,
             )
-            .px(px(12.0))
+            .pl(px(self.group_checkbox_padding(12.0)))
+            .pr(px(12.0))
             .gap(px(8.0))
             .child(checkbox)
             .child(
@@ -1430,7 +1492,11 @@ impl DirectoryListDemo {
         // Explorer 型の一覧としては項目が浮いて見える。
         group = group.items_start();
         if self.layout != ViewLayout::Rows {
-            group = group.px(px(12.0)).pb(px(16.0)).gap(px(16.0));
+            group = group
+                .px(px(12.0))
+                .gap(px(16.0))
+                .pt(px(pad_top))
+                .pb(px(pad_bottom));
         }
         let entries = self.row_entries(row);
         let entry_count = entries.len();
@@ -1452,5 +1518,96 @@ impl DirectoryListDemo {
             }
         }
         group.id(format!("{id_scope}-entry-group-{row}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn icon_checkbox_uses_contained_media_bounds_at_all_zoom_and_dpi_steps() {
+        let steps = ((ICON_SCALE_MAX - ICON_SCALE_MIN) / ICON_SCALE_STEP) as usize;
+        for step in 0..=steps {
+            let zoom = ICON_SCALE_MIN + step as f32 * ICON_SCALE_STEP;
+            let icon_size = ViewLayout::Icons.icon_size(zoom);
+            let icon_box = ViewLayout::Icons.icon_container(zoom);
+            for dpi in [1.0, 1.5, 2.0] {
+                let dimension = |logical| gpui::DevicePixels((logical * dpi) as i32);
+                for (image, x_inset, y_inset) in [
+                    (None, 0.0, 0.0),
+                    (Some(size(dimension(120.0), dimension(120.0))), 0.0, 0.0),
+                    (
+                        Some(size(dimension(120.0), dimension(60.0))),
+                        0.0,
+                        icon_size / 4.0,
+                    ),
+                    (
+                        Some(size(dimension(60.0), dimension(120.0))),
+                        icon_size / 4.0,
+                        0.0,
+                    ),
+                ] {
+                    let hit_origin = icon_checkbox_hit_origin(icon_box, icon_size, image);
+                    let mark_offset =
+                        px(gpui_filer_ui::CHECKBOX_HIT_SIZE - gpui_filer_ui::CHECKBOX_MARK_SIZE);
+                    let mark_origin = hit_origin + gpui::point(mark_offset, mark_offset);
+                    assert!(
+                        (mark_origin.x.as_f32()
+                            - (ICON_BOX_PADDING + x_inset + ICON_CHECKBOX_INSET))
+                            .abs()
+                            < 0.001
+                    );
+                    assert!(
+                        (mark_origin.y.as_f32()
+                            - (ICON_BOX_PADDING + y_inset + ICON_CHECKBOX_INSET))
+                            .abs()
+                            < 0.001
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rows_stripe_odd_entry_indices_in_both_themes() {
+        let dark = gpui_filer_ui::ThemePalette::default();
+        let light = gpui_filer_ui::ThemePalette {
+            surface_base: gpui::rgb(0xffffff),
+            text: gpui::rgb(0x222222),
+            ..dark
+        };
+        for (palette, alpha) in [(dark, 0.04), (light, 0.03)] {
+            let stripe = Some(palette.text.opacity(alpha));
+            for (index, expected) in [(0, None), (1, stripe), (2, None), (3, stripe)] {
+                assert_eq!(
+                    row_background(index, true, palette, false, false, false).0,
+                    expected
+                );
+            }
+            assert_eq!(
+                row_background(3, false, palette, false, false, false).0,
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn row_hover_selection_and_focus_replace_the_stripe() {
+        let palette = gpui_filer_ui::ThemePalette::default();
+        for (hovered, selected, focused, expected) in [
+            (false, false, true, palette.focus_bg),
+            (false, true, false, palette.selection_bg),
+            (false, true, true, palette.selection_focus_bg),
+            (true, false, false, palette.hover_bg),
+            (true, false, true, palette.hover_bg),
+            (true, true, false, palette.selection_hover_bg),
+            (true, true, true, palette.selection_hover_bg),
+        ] {
+            assert_eq!(
+                row_background(1, true, palette, hovered, selected, focused).0,
+                Some(expected)
+            );
+        }
     }
 }

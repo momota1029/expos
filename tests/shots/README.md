@@ -49,8 +49,9 @@ bash scripts/shot.sh --repeat 2 tests/shots/fixtures/rich tests/shots/views-rich
 ~~~
 
 Each screenshot stem in the table produces both `-light.png` and `-dark.png`.
-The viewport is 1280 × 800 except for `narrow` at 640 × 700 and
-`sort-and-columns` at 1920 × 1080.
+The viewport is 1280 × 800 except for `narrow` at 640 × 700,
+`sort-and-columns` at 1920 × 1080, and `icons-thumbs` at both 1280 × 800 and
+1920 × 1080.
 
 | Scenario | Fixture | Screenshot stems |
 | --- | --- | --- |
@@ -58,6 +59,8 @@ The viewport is 1280 × 800 except for `narrow` at 640 × 700 and
 | `context-menu.json` | `basic` | `context-menu-file`, `context-menu-compression`, `context-menu-folder`, `context-menu-background`, `context-menu-creation` |
 | `job-progress.json` | `basic` | `job-progress-rename-collision`, `job-progress-details`, `job-progress-details-populated` |
 | `views-rich.json` | `rich` | `views-rich-rows-top`, `views-rich-rows-scrolled`, `views-rich-tiles-top`, `views-rich-tiles-scrolled`, `views-rich-icons-top`, `views-rich-icons-scrolled` |
+| `icons-thumbs.json` | `rich` | `icons-thumbs-1280`, `icons-thumbs-1920`, `icons-thumbs-min-zoom`, `icons-thumbs-tiles` |
+| `rows-stripes.json` | `rich` | `rows-stripes-top`, `rows-stripes-scrolled` |
 | `long-names.json` | `rich` | `long-names-rows`, `long-names-tiles` |
 | `narrow.json` | `rich` | `narrow-rows`, `narrow-tiles` |
 | `hover.json` | `basic` | `hover-row`, `hover-layout-button`, `hover-group-button`, `hover-tab`, `hover-cleared` |
@@ -81,6 +84,8 @@ submenus and File Info. The hamburger has no standalone Settings, Keymaps, or
 About panels. Native Properties and the Everything provider require Windows.
 The Linux search scenario exercises the resulting unavailable UI.
 Grouping cycles among None, Modified Date, and Kind on click.
+The `cycle_grouping` step uses the same cycle, and `icon_scale` accepts a
+scale from 0.75 to 2.5.
 
 The Linux executor does not support Create Folder, so the scenario omits
 captures of the folder creation flow. It opens the rename editor with F2 on
@@ -108,7 +113,8 @@ viewport. `click` defaults to the left button.
 
 `hover` moves the pointer without pressing a button. Put it immediately before
 the screenshot that should retain hover. The runner clears the pointer
-after that capture. `wait_idle` optionally waits for an exact, visible entry
-name in the active listing in addition to directory enumeration and pending
-rename reconciliation. Search and Quick Preview use explicit settling waits
-for their background results.
+after that capture. `wait_idle` waits for directory enumeration, pending rename
+reconciliation, and three consecutive frames with the same directory geometry.
+It can also require an exact entry name in the active listing. `screenshot`
+includes visible thumbnails in that wait. Search and Quick Preview use explicit
+settling waits for their background results.

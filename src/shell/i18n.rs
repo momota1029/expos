@@ -413,6 +413,7 @@ pub(crate) enum Message {
     ToggleFileInfoPane,
     ShowHiddenItems,
     ItemCheckBoxes,
+    AlternateRowColors,
     FileInfoKind,
     FileInfoSize,
     FileInfoModified,
@@ -494,6 +495,8 @@ pub(crate) enum Message {
     UpdateUpToDate,
     #[cfg(windows)]
     UpdateFailed,
+    #[cfg(windows)]
+    UpdateInformationUnreadable,
     #[cfg(windows)]
     UpdateSeparateData,
     MenuTheme,
@@ -968,6 +971,7 @@ impl Translator {
             Message::ToggleFileInfoPane => "ファイル情報",
             Message::ShowHiddenItems => "隠し項目を表示",
             Message::ItemCheckBoxes => "項目のチェックボックス",
+            Message::AlternateRowColors => "行の色を交互にする",
             Message::FileInfoKind => "種類",
             Message::FileInfoSize => "サイズ",
             Message::FileInfoModified => "更新日時",
@@ -1048,6 +1052,8 @@ impl Translator {
             Message::UpdateUpToDate => "利用できる更新はありません",
             #[cfg(windows)]
             Message::UpdateFailed => "更新に失敗しました: {error}",
+            #[cfg(windows)]
+            Message::UpdateInformationUnreadable => "更新情報を読み取れませんでした",
             #[cfg(windows)]
             Message::UpdateSeparateData => "安定版とベータ版のデータは別々に保存されます。",
             Message::MenuTheme => "テーマ",
@@ -1730,6 +1736,7 @@ fn english(message: Message) -> Option<&'static str> {
         Message::ToggleFileInfoPane => "File information",
         Message::ShowHiddenItems => "Show hidden items",
         Message::ItemCheckBoxes => "Item check boxes",
+        Message::AlternateRowColors => "Alternate row colors",
         Message::FileInfoKind => "Kind",
         Message::FileInfoSize => "Size",
         Message::FileInfoModified => "Date modified",
@@ -1810,6 +1817,8 @@ fn english(message: Message) -> Option<&'static str> {
         Message::UpdateUpToDate => "No update available",
         #[cfg(windows)]
         Message::UpdateFailed => "Update failed: {error}",
+        #[cfg(windows)]
+        Message::UpdateInformationUnreadable => "Couldn't read the update information",
         #[cfg(windows)]
         Message::UpdateSeparateData => "Stable and Beta keep separate app data.",
         Message::MenuTheme => "Theme",

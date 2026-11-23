@@ -1,13 +1,59 @@
+use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use super::selection::{Release, ReleaseMetadata};
-use super::{Channel, Offer, selection};
+use super::{Channel, Offer, UTF8_BOM, selection, without_utf8_bom};
 use install_layout::VersionDir;
+use serde::de::DeserializeOwned;
 
 pub(super) const MAX_ZIP_BYTES: u64 = 200 * 1024 * 1024;
 pub(super) const MAX_METADATA_BYTES: u64 = 1024 * 1024;
+const RELEASES_JSON: &str = "releases.json";
+const CHANNEL_JSON: &str = "channel.json";
+
+#[derive(Debug)]
+pub(super) struct UpdateInformationError;
+
+impl fmt::Display for UpdateInformationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Couldn't read the update information")
+    }
+}
+
+impl std::error::Error for UpdateInformationError {}
+
+fn unreadable_metadata(
+    document: &str,
+    context: impl fmt::Display,
+    error: impl fmt::Display,
+) -> io::Error {
+    eprintln!("[expos][update] {document}: {context}: {error}");
+    io::Error::other(UpdateInformationError)
+}
+
+fn parse_metadata_json<T: DeserializeOwned>(document: &str, bytes: &[u8]) -> io::Result<T> {
+    serde_json::from_slice(without_utf8_bom(bytes)).map_err(|error| {
+        let prefix = &bytes[..bytes.len().min(80)];
+        let has_bom = prefix.starts_with(UTF8_BOM);
+        let kind = match without_utf8_bom(prefix).trim_ascii_start() {
+            [] if prefix.len() == bytes.len() => "empty",
+            [] => "whitespace",
+            [b'<', ..] => "HTML/markup",
+            [b'{' | b'[', ..] => "JSON-like",
+            _ => "other",
+        };
+        unreadable_metadata(
+            document,
+            format_args!(
+                "invalid JSON, first {} bytes: {kind}, UTF-8 BOM={has_bom}",
+                prefix.len()
+            ),
+            error,
+        )
+    })
+}
 
 pub(crate) trait ReleaseSource {
     fn list_releases(&self) -> io::Result<Vec<Release>>;
@@ -18,8 +64,9 @@ pub(crate) struct DirSource(pub PathBuf);
 
 impl ReleaseSource for DirSource {
     fn list_releases(&self) -> io::Result<Vec<Release>> {
-        let bytes = read_limited(&self.0.join("releases.json"), MAX_METADATA_BYTES)?;
-        serde_json::from_slice(&bytes).map_err(io::Error::other)
+        let bytes = read_limited(&self.0.join(RELEASES_JSON), MAX_METADATA_BYTES)
+            .map_err(|error| unreadable_metadata(RELEASES_JSON, "read failed", error))?;
+        parse_metadata_json(RELEASES_JSON, &bytes)
     }
 
     fn fetch_asset(&self, url: &str, dest: &Path, max_bytes: u64) -> io::Result<()> {
@@ -48,13 +95,16 @@ pub(crate) struct GitHubSource;
 impl ReleaseSource for GitHubSource {
     fn list_releases(&self) -> io::Result<Vec<Release>> {
         let temp = tempfile::tempdir()?;
-        let dest = temp.path().join("releases.json");
+        let dest = temp.path().join(RELEASES_JSON);
         curl(
             "https://api.github.com/repos/momota1029/expos/releases?per_page=30",
             &dest,
             MAX_METADATA_BYTES,
-        )?;
-        serde_json::from_slice(&read_limited(&dest, MAX_METADATA_BYTES)?).map_err(io::Error::other)
+        )
+        .map_err(|error| unreadable_metadata(RELEASES_JSON, "download failed", error))?;
+        let bytes = read_limited(&dest, MAX_METADATA_BYTES)
+            .map_err(|error| unreadable_metadata(RELEASES_JSON, "read failed", error))?;
+        parse_metadata_json(RELEASES_JSON, &bytes)
     }
 
     fn fetch_asset(&self, url: &str, dest: &Path, max_bytes: u64) -> io::Result<()> {
@@ -205,8 +255,9 @@ pub(super) fn check(
                 source,
                 &assets.manifest.browser_download_url,
                 temp.path(),
-                "channel.json",
+                CHANNEL_JSON,
             )?;
+            let manifest = parse_metadata_json(CHANNEL_JSON, &manifest)?;
             let sums = fetch_metadata(
                 source,
                 &assets.sums.browser_download_url,
@@ -214,7 +265,7 @@ pub(super) fn check(
                 "SHA256SUMS",
             )?;
             Ok(ReleaseMetadata {
-                channel_json: manifest,
+                manifest,
                 sha256sums: sums,
             })
         })();
@@ -243,8 +294,11 @@ fn fetch_metadata(
     name: &str,
 ) -> io::Result<Vec<u8>> {
     let dest = dir.join(name);
-    source.fetch_asset(url, &dest, MAX_METADATA_BYTES)?;
-    let result = read_limited(&dest, MAX_METADATA_BYTES);
+    source
+        .fetch_asset(url, &dest, MAX_METADATA_BYTES)
+        .map_err(|error| unreadable_metadata(name, "download failed", error))?;
+    let result = read_limited(&dest, MAX_METADATA_BYTES)
+        .map_err(|error| unreadable_metadata(name, "read failed", error));
     fs::remove_file(dest)?;
     result
 }
@@ -252,6 +306,65 @@ fn fetch_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const ZIP: &str = "expos-v2.0.0-windows-x86_64.zip";
+    const HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    fn write_release_fixture(dir: &Path, prefix: &[u8]) {
+        let assets = [
+            ZIP,
+            "expos-v2.0.0-source-vendored.zip",
+            "SHA256SUMS",
+            CHANNEL_JSON,
+        ]
+        .map(|name| serde_json::json!({"name": name, "browser_download_url": name, "size": 1}));
+        let releases = serde_json::json!([{"tag_name": "v2.0.0", "assets": assets}]);
+        let manifest = serde_json::json!({
+            "channel": "stable", "version": "2.0.0", "zip": ZIP, "sha256": HASH,
+        });
+        for (name, contents) in [
+            (RELEASES_JSON, releases.to_string()),
+            (CHANNEL_JSON, manifest.to_string()),
+            ("SHA256SUMS", format!("{HASH}  {ZIP}\n")),
+        ] {
+            fs::write(dir.join(name), [prefix, contents.as_bytes()].concat()).unwrap();
+        }
+    }
+
+    #[test]
+    fn accepts_bom_in_release_metadata_and_still_checks_the_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        write_release_fixture(dir.path(), UTF8_BOM);
+        let source = DirSource(dir.path().into());
+        let offer = check(&source, "1.0.0", Channel::Stable, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(offer.tag, "v2.0.0");
+        assert_eq!(offer.sha256, HASH);
+
+        let sums = dir.path().join("SHA256SUMS");
+        let mut bytes = fs::read(&sums).unwrap();
+        bytes[UTF8_BOM.len()] = b'b';
+        fs::write(sums, bytes).unwrap();
+        assert!(
+            check(&source, "1.0.0", Channel::Stable, false)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn html_in_either_json_document_returns_the_friendly_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = DirSource(dir.path().into());
+        for document in [RELEASES_JSON, CHANNEL_JSON] {
+            write_release_fixture(dir.path(), b"");
+            fs::write(dir.path().join(document), b"\xef\xbb\xbf \n<!DOCTYPE html>").unwrap();
+            let error = check(&source, "1.0.0", Channel::Stable, false).unwrap_err();
+            assert!(error.get_ref().unwrap().is::<UpdateInformationError>());
+            assert_eq!(error.to_string(), "Couldn't read the update information");
+        }
+    }
 
     #[test]
     fn only_accepts_https_on_official_asset_hosts() {

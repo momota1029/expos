@@ -1367,6 +1367,9 @@ pub struct SessionSnapshot {
     /// App-wide per-item checkbox visibility; old snapshots preserve the visible default.
     #[serde(default = "default_item_check_boxes")]
     pub item_check_boxes: bool,
+    /// App-wide row striping; snapshots without this field restore it on.
+    #[serde(default = "default_alternate_row_colors")]
+    pub alternate_row_colors: bool,
     /// Application-wide theme basename; paths are never persisted here.
     #[serde(default = "default_theme_name")]
     pub theme_name: String,
@@ -1485,6 +1488,7 @@ impl LegacyCurrentSessionSnapshot {
             select_extension_on_rename: self.select_extension_on_rename,
             show_hidden_items: false,
             item_check_boxes: true,
+            alternate_row_colors: true,
             theme_name: self.theme_name,
             language_override: self.language_override,
             clean_shutdown: self.clean_shutdown,
@@ -1704,6 +1708,7 @@ impl SessionSnapshot {
                     select_extension_on_rename: self.select_extension_on_rename,
                     show_hidden_items: false,
                     item_check_boxes: true,
+                    alternate_row_colors: true,
                     theme_name: self.theme_name.clone(),
                     language_override: self.language_override.clone(),
                     clean_shutdown: self.clean_shutdown,
@@ -1881,6 +1886,10 @@ fn default_item_check_boxes() -> bool {
     true
 }
 
+fn default_alternate_row_colors() -> bool {
+    true
+}
+
 fn default_workspace_id_high_water() -> u64 {
     1
 }
@@ -1970,6 +1979,7 @@ impl LegacySessionSnapshot {
             select_extension_on_rename: false,
             show_hidden_items: false,
             item_check_boxes: true,
+            alternate_row_colors: true,
             theme_name: "default".into(),
             language_override: default_language_override(),
             clean_shutdown: self.clean_shutdown,
@@ -2023,6 +2033,7 @@ impl LegacyFlatSessionSnapshot {
             select_extension_on_rename: self.select_extension_on_rename,
             show_hidden_items: false,
             item_check_boxes: true,
+            alternate_row_colors: true,
             theme_name: "default".into(),
             language_override: default_language_override(),
             clean_shutdown: self.clean_shutdown,
@@ -2083,6 +2094,7 @@ impl LegacyPaneSessionSnapshot {
             select_extension_on_rename: self.select_extension_on_rename,
             show_hidden_items: false,
             item_check_boxes: true,
+            alternate_row_colors: true,
             theme_name: self.theme_name,
             language_override: self.language_override,
             clean_shutdown: self.clean_shutdown,
@@ -2325,6 +2337,7 @@ mod tests {
             select_extension_on_rename: false,
             show_hidden_items: false,
             item_check_boxes: true,
+            alternate_row_colors: true,
             theme_name: "default".into(),
             language_override: default_language_override(),
             clean_shutdown: true,
@@ -2358,8 +2371,14 @@ mod tests {
         entry.location = LocationValue::from_location(&location).unwrap();
         let mut original = snapshot(vec![entry]);
         original.schema_version = 10;
-        let restored = SessionSnapshot::from_json(&serde_json::to_vec(&original).unwrap()).unwrap();
+        let mut value = serde_json::to_value(original).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("alternate_row_colors");
+        let restored = SessionSnapshot::from_json(&serde_json::to_vec(&value).unwrap()).unwrap();
         assert_eq!(restored.schema_version, SCHEMA_VERSION);
+        assert!(restored.alternate_row_colors);
         assert_eq!(
             restored.workspaces[0].panes[0].tabs[0]
                 .location
@@ -2431,6 +2450,7 @@ mod tests {
         original.select_extension_on_rename = true;
         original.show_hidden_items = true;
         original.item_check_boxes = false;
+        original.alternate_row_colors = false;
         let bytes = original.to_json().unwrap();
         let restored = SessionSnapshot::from_json(&bytes).unwrap();
         assert_eq!(restored, original);
@@ -2440,10 +2460,11 @@ mod tests {
         assert!(restored.select_extension_on_rename);
         assert!(restored.show_hidden_items);
         assert!(!restored.item_check_boxes);
+        assert!(!restored.alternate_row_colors);
     }
 
     #[test]
-    fn schema_two_without_rename_preference_uses_the_safe_default() {
+    fn current_schema_without_display_preferences_uses_defaults() {
         let original = snapshot(vec![tab(1, r"C:\work")]);
         let mut value = serde_json::to_value(original).unwrap();
         value
@@ -2452,11 +2473,39 @@ mod tests {
             .remove("select_extension_on_rename");
         value.as_object_mut().unwrap().remove("show_hidden_items");
         value.as_object_mut().unwrap().remove("item_check_boxes");
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("alternate_row_colors");
 
         let restored = SessionSnapshot::from_json(&serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(!restored.select_extension_on_rename);
         assert!(!restored.show_hidden_items);
         assert!(restored.item_check_boxes);
+        assert!(restored.alternate_row_colors);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn alternate_row_colors_round_trips_with_lossless_windows_paths() {
+        let mut entry = tab(1, r"C:\work");
+        let path = PathValue::WindowsUtf16 {
+            units: vec![67, 58, 92, 97, 0xd800, 98],
+        };
+        entry.location = LocationValue::Path { path: path.clone() };
+        let mut original = snapshot(vec![entry]);
+        original.alternate_row_colors = false;
+
+        let bytes = original.to_json().unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["schema_version"], 11);
+        assert_eq!(payload["alternate_row_colors"], false);
+        let restored = SessionSnapshot::from_json(&bytes).unwrap();
+        assert_eq!(restored, original);
+        assert_eq!(
+            restored.workspaces[0].panes[0].tabs[0].location,
+            LocationValue::Path { path },
+        );
     }
 
     #[test]

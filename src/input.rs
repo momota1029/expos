@@ -204,6 +204,7 @@ pub(super) const MOVE_MODIFIED_RIGHT: &str = "view.move_modified_right";
 pub(super) const TOGGLE_FILE_INFO_PANE: &str = "view.toggle_file_info_pane";
 pub(super) const TOGGLE_SHOW_HIDDEN_ITEMS: &str = "view.toggle_show_hidden_items";
 pub(super) const TOGGLE_ITEM_CHECK_BOXES: &str = "view.toggle_item_check_boxes";
+pub(super) const TOGGLE_ALTERNATE_ROW_COLORS: &str = "view.toggle_alternate_row_colors";
 pub(super) const COPY: &str = "file_view.copy";
 pub(super) const CUT: &str = "file_view.cut";
 pub(super) const PASTE: &str = "file_view.paste";

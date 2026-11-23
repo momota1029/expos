@@ -121,6 +121,10 @@ restarts through the launcher.
 
 Developer installs also check GitHub automatically unless `EXPOS_NO_UPDATE_CHECK=1` is set.
 
+If `update-settings-v1.json` is invalid, expos uses the running build's channel
+and enables automatic checks again. It tries to move the invalid file aside as
+`update-settings-v1.json.bad-<unix>` and retains up to three backups.
+
 ### Exercise an update offline on Windows
 
 Use a Windows ZIP for a baseline build that contains the updater, a launcher
