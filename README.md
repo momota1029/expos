@@ -19,6 +19,7 @@ Interface controls use bundled Fluent UI System Icons across platforms. Their MI
 
 The [Windows installation guide](release/README.md) covers installing a
 release ZIP, switching versions, and uninstalling.
+Taskbar pins created from an installed expos window follow the active version.
 Use **Updates** in launcher-installed builds, including WSL developer installs,
 to check the stable or beta channel.
 See the [updater guide](release/README.md#updater) for channel behavior and

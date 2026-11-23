@@ -17272,6 +17272,8 @@ impl FilerShell {
         let keymap_runtime = self.keymap_runtime.clone();
         let keymap_notices = self.keymap_notices.clone();
         let handle = match cx.open_window(options, |_window, cx| {
+            #[cfg(windows)]
+            crate::taskbar::configure_window(_window);
             cx.new(|cx| FilerShell::new(startup, keymap_runtime, keymap_notices, cx))
         }) {
             Ok(handle) => handle,

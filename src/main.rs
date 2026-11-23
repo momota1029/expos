@@ -456,6 +456,8 @@ mod shell_icons;
 mod show_hidden_items;
 mod sorting;
 mod special;
+#[cfg(windows)]
+mod taskbar;
 mod theme;
 mod thumbnails;
 mod titlebar;
@@ -18650,6 +18652,7 @@ fn main() {
     let shot_result = shot_exit.clone();
     #[cfg(windows)]
     {
+        taskbar::set_process_identity();
         app_paths::prepare_startup_data();
         archive_provider::application_image::initialize();
     }
@@ -18806,6 +18809,8 @@ fn main() {
                     snapshot.active_window = saved_window.id;
                 }
                 let handle = match cx.open_window(options, |_window, cx| {
+                    #[cfg(windows)]
+                    taskbar::configure_window(_window);
                     cx.new(|cx| {
                         #[cfg(target_os = "linux")]
                         if let Some(plan) = shot_startup {

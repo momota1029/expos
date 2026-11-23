@@ -155,6 +155,9 @@ try {
         $shortcut = $shell.CreateShortcut($shortcutPath)
         Assert-That ($shortcut.TargetPath -eq $launcherPath) 'Shortcut target is incorrect'
         Assert-That ($shortcut.WorkingDirectory -eq $testRoot) 'Shortcut working directory is incorrect'
+        $appId = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'AppUserModelID.txt')).Trim()
+        Assert-That ([bool]$appId) 'AppUserModelID file is empty'
+        Assert-That ([ExposInstall.ShortcutProperties]::GetAppUserModelId($shortcutPath) -ceq $appId) 'Shortcut AppUserModelID is incorrect'
     }
 
     Run-Check 'a bad SHA-256 leaves the active version and shortcut intact' {

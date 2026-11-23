@@ -1,8 +1,9 @@
 # Windows installation
 
 Use Windows PowerShell 5.1 or PowerShell 7 on Windows. Keep
-`Install-Expos.ps1`, `Uninstall-Expos.ps1`, and `Install-Common.ps1` in the
-same directory. Pass the Windows release ZIP directly to the installer.
+`Install-Expos.ps1`, `Uninstall-Expos.ps1`, `Install-Common.ps1`, and
+`AppUserModelID.txt` in the same directory. Pass the Windows release ZIP
+directly to the installer.
 
 ```powershell
 .\release\Install-Expos.ps1 -Zip .\expos-v0.1.0-windows-x86_64.zip -Sha256File .\SHA256SUMS
@@ -40,6 +41,11 @@ The scripts manage `%APPDATA%\Microsoft\Windows\Start Menu\Programs\expos.lnk`
 by default. Use `-StartMenuDir <path>` to redirect the shortcut, or
 `-NoShortcut` to skip shortcut handling. Close all running versions before
 uninstalling. An in-use executable blocks uninstall even with `-Force`.
+
+Taskbar pins created from the updated shortcut or a launcher-started window
+use the install-root launcher and follow the active version across beta and
+stable releases. If an older pin points to a versioned executable, unpin it
+and pin expos again after installing the update.
 
 Uninstall removes the shortcut and the managed installation files and
 versions. It keeps `<root>\data` and removes the install root if it is empty.

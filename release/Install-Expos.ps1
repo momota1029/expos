@@ -174,7 +174,93 @@ function Publish-ExposLauncher([string]$Source, [string]$Destination, [string]$B
     }
 }
 
+function Initialize-ExposShortcutProperties {
+    if ('ExposInstall.ShortcutProperties' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+
+namespace ExposInstall {
+    public static class ShortcutProperties {
+        private static readonly Guid ShellLink = new Guid("00021401-0000-0000-C000-000000000046");
+        private static readonly Guid AppUserModel = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3");
+        private const ushort VT_LPWSTR = 31;
+        private const int STGM_READ = 0;
+        private const int STGM_READWRITE = 2;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PropertyKey {
+            public Guid Format;
+            public uint Id;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PropVariant {
+            public ushort Type;
+            private ushort reserved1, reserved2, reserved3;
+            public IntPtr String;
+            // The native union also has two-word members on x86 and x64.
+            private IntPtr unionPadding;
+        }
+
+        [ComImport, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        private interface IPropertyStore {
+            void GetCount(out uint count);
+            void GetAt(uint index, out PropertyKey key);
+            void GetValue(ref PropertyKey key, out PropVariant value);
+            void SetValue(ref PropertyKey key, ref PropVariant value);
+            void Commit();
+        }
+
+        [DllImport("ole32.dll")]
+        private static extern int PropVariantClear(ref PropVariant value);
+
+        public static void SetAppUserModelId(string path, string id) {
+            object link = Activator.CreateInstance(Type.GetTypeFromCLSID(ShellLink));
+            try {
+                var file = (IPersistFile)link;
+                file.Load(path, STGM_READWRITE);
+                var store = (IPropertyStore)link;
+                var key = new PropertyKey { Format = AppUserModel, Id = 5 };
+                var value = new PropVariant { Type = VT_LPWSTR, String = Marshal.StringToCoTaskMemUni(id) };
+                try {
+                    store.SetValue(ref key, ref value);
+                    store.Commit();
+                    file.Save(path, true);
+                } finally {
+                    PropVariantClear(ref value);
+                }
+            } finally {
+                Marshal.FinalReleaseComObject(link);
+            }
+        }
+
+        public static string GetAppUserModelId(string path) {
+            object link = Activator.CreateInstance(Type.GetTypeFromCLSID(ShellLink));
+            try {
+                ((IPersistFile)link).Load(path, STGM_READ);
+                var key = new PropertyKey { Format = AppUserModel, Id = 5 };
+                PropVariant value;
+                ((IPropertyStore)link).GetValue(ref key, out value);
+                try {
+                    return value.Type == VT_LPWSTR ? Marshal.PtrToStringUni(value.String) : null;
+                } finally {
+                    PropVariantClear(ref value);
+                }
+            } finally {
+                Marshal.FinalReleaseComObject(link);
+            }
+        }
+    }
+}
+'@
+}
+
 function Set-ExposShortcut([string]$Path, [string]$Launcher, [string]$WorkingDirectory) {
+    Initialize-ExposShortcutProperties
+    $appId = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'AppUserModelID.txt')).Trim()
     $parent = [IO.Path]::GetDirectoryName($Path)
     $null = [IO.Directory]::CreateDirectory($parent)
     $temporary = Join-Path $parent ("expos-{0}.lnk" -f [guid]::NewGuid().ToString('N'))
@@ -184,6 +270,7 @@ function Set-ExposShortcut([string]$Path, [string]$Launcher, [string]$WorkingDir
         $shortcut.TargetPath = $Launcher
         $shortcut.WorkingDirectory = $WorkingDirectory
         $shortcut.Save()
+        [ExposInstall.ShortcutProperties]::SetAppUserModelId($temporary, $appId)
         Publish-ExposFile $temporary $Path
     } finally {
         [IO.File]::Delete($temporary)
