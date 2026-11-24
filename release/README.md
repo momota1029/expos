@@ -1,5 +1,25 @@
 # Windows installation
 
+## Install from PowerShell
+
+```powershell
+powershell -c "irm https://raw.githubusercontent.com/momota1029/expos/main/release/get-expos.ps1 | iex"
+```
+
+Set `$env:EXPOS_CHANNEL` to `beta` (the default, newest prerelease) or
+`stable` (newest non-prerelease) before running the command. Set
+`$env:EXPOS_VERSION` to pin a release such as `v0.1.1-beta.5`, regardless of
+channel. The bootstrap verifies the Windows x86_64 ZIP against the release's
+`SHA256SUMS`. If installer files are missing from an older tag, it warns and
+uses a pinned `main` installer when the ZIP has the expected version and
+launcher layout.
+
+The one-liner fetches and executes the bootstrap from GitHub. Run it only if
+you trust this repository. The installer runs in a child PowerShell with a
+process-only execution policy override.
+
+## Install from a downloaded ZIP
+
 Use Windows PowerShell 5.1 or PowerShell 7 on Windows. Keep
 `Install-Expos.ps1`, `Uninstall-Expos.ps1`, `Install-Common.ps1`, and
 `AppUserModelID.txt` in the same directory. Pass the Windows release ZIP
