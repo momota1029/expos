@@ -12030,7 +12030,7 @@ impl FilerShell {
         let text_scroll = self.quick_preview.text_scroll().clone();
         let palette = gpui_filer_ui::theme_palette(cx);
         let header = div()
-            .h(px(44.0))
+            .min_h(px(44.0))
             .flex_shrink_0()
             .pl(px(16.0))
             .flex()
@@ -12038,7 +12038,7 @@ impl FilerShell {
             .gap(px(8.0))
             .text_size(px(14.0))
             .font_weight(gpui::FontWeight::SEMIBOLD)
-            .child(div().flex_1().min_w_0().truncate().child(filename))
+            .child(div().flex_1().min_w_0().whitespace_normal().child(filename))
             .child(
                 div()
                     .id("quick-preview-close")

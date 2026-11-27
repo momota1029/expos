@@ -2219,14 +2219,12 @@ fn render_operation_history_row(
                     div()
                         .text_size(px(13.0))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .truncate()
                         .child(title),
                 )
                 .child(
                     div()
                         .text_size(px(12.0))
                         .text_color(palette.text_muted)
-                        .line_clamp(2)
                         .child(secondary),
                 ),
         )

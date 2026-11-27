@@ -837,7 +837,6 @@ impl FilerShell {
                     .max_w(gpui::relative(0.45))
                     .text_size(px(SHORTCUT_FONT_SIZE))
                     .text_color(palette.text_muted)
-                    .truncate()
                     .child(label)
             }))
             .when(branch, |element| {

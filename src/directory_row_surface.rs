@@ -693,7 +693,8 @@ impl DirectoryListDemo {
                 .flex_shrink_0()
                 // 折り返した名前と入力欄の高さを行に反映する。
                 .min_h(px(ESTIMATED_ROW_HEIGHT))
-                .self_start()
+                // 詳細列の方が高い行でも、背景と操作面を行の高さに揃える。
+                .self_stretch()
                 .px(px(CELL_PADDING_X))
                 .py(px(CELL_PADDING_Y))
                 .flex()
@@ -932,8 +933,6 @@ impl DirectoryListDemo {
                     Message::ThumbnailFolderNoPreview
                 }
             })
-            // 見本の候補がないフォルダーは、通常のフォルダーアイコンだけで示す。
-            .filter(|message| *message != Message::ThumbnailFolderNoPreview)
             .map(|message| self.translator.text(message).into_owned());
         let preview_images = entry
             .path
@@ -1002,8 +1001,7 @@ impl DirectoryListDemo {
                         .text_size(px(10.0))
                         .line_height(px(12.0))
                         .text_center()
-                        .overflow_hidden()
-                        .text_ellipsis()
+                        .whitespace_normal()
                         .child(label),
                 )
             });

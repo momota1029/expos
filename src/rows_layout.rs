@@ -13,7 +13,6 @@ use crate::{
 
 const ROW_CHECKBOX_WIDTH: f32 = gpui_filer_ui::CHECKBOX_HIT_SIZE;
 const MIN_NAME_CELL_WIDTH: f32 = 144.0;
-const MAX_NAME_CELL_WIDTH: f32 = 640.0;
 const COLUMN_DIVIDER_WIDTH: f32 = 1.0;
 const HEADER_DIVIDER_OPACITY: f32 = 0.08;
 
@@ -71,11 +70,7 @@ pub(super) fn project_columns_with_checkbox(
     if columns.size {
         metadata_width += size_width;
     }
-    // 幅が足りないときだけ投影から外す。並び順や保存済みの幅は変えない。
-    if columns.kind && content_width < MIN_NAME_CELL_WIDTH + metadata_width {
-        columns.kind = false;
-        metadata_width -= kind_width;
-    }
+    // 狭いときに外す順は、更新日時、サイズ、種類。
     if columns.modified && content_width < MIN_NAME_CELL_WIDTH + metadata_width {
         columns.modified = false;
         metadata_width -= modified_width;
@@ -84,8 +79,11 @@ pub(super) fn project_columns_with_checkbox(
         columns.size = false;
         metadata_width -= size_width;
     }
-    // Name しか残らない幅ではそのセルも縮める。広い pane の余りは末尾へ残す。
-    columns.name_width = (content_width - metadata_width).clamp(0.0, MAX_NAME_CELL_WIDTH);
+    if columns.kind && content_width < MIN_NAME_CELL_WIDTH + metadata_width {
+        columns.kind = false;
+        metadata_width -= kind_width;
+    }
+    columns.name_width = (content_width - metadata_width).max(MIN_NAME_CELL_WIDTH);
     columns
 }
 
@@ -99,7 +97,7 @@ pub(super) fn detail_cell(text: impl Into<SharedString>, width: f32) -> gpui::Di
         .items_center()
         .flex_shrink_0()
         .overflow_hidden()
-        .child(div().flex_1().min_w_0().truncate().child(text.into()))
+        .child(div().flex_1().min_w_0().whitespace_normal().child(text.into()))
 }
 
 fn resize_divider(
@@ -421,35 +419,30 @@ mod tests {
         let enabled = crate::folder_view_preferences::ColumnPrefs::default();
         let project = |width| project_columns_with_checkbox(width, enabled, true);
         let name_threshold = ROW_PADDING_X * 2.0 + ROW_CHECKBOX_WIDTH + MIN_NAME_CELL_WIDTH;
-        let size_threshold = name_threshold + enabled.size_width + COLUMN_DIVIDER_WIDTH;
+        let kind_threshold = name_threshold + enabled.kind_width + COLUMN_DIVIDER_WIDTH;
+        let size_threshold = kind_threshold + enabled.size_width + COLUMN_DIVIDER_WIDTH;
         let modified_threshold = size_threshold + enabled.modified_width + COLUMN_DIVIDER_WIDTH;
-        let kind_threshold = modified_threshold + enabled.kind_width + COLUMN_DIVIDER_WIDTH;
 
-        let all = project(kind_threshold);
+        let all = project(modified_threshold);
         assert!(all.kind && all.size && all.modified);
         assert_eq!(all.name_width, MIN_NAME_CELL_WIDTH);
 
-        let kind_hidden = project(kind_threshold - 0.1);
-        assert!(!kind_hidden.kind && kind_hidden.size && kind_hidden.modified);
-        assert!(kind_hidden.name_width >= MIN_NAME_CELL_WIDTH);
-
         let modified_hidden = project(modified_threshold - 0.1);
-        assert!(!modified_hidden.kind && modified_hidden.size && !modified_hidden.modified);
-        assert!(modified_hidden.name_width >= MIN_NAME_CELL_WIDTH);
+        assert!(modified_hidden.kind && modified_hidden.size && !modified_hidden.modified);
 
-        let name_only_columns = project(size_threshold - 0.1);
+        let size_hidden = project(size_threshold - 0.1);
+        assert!(size_hidden.kind && !size_hidden.size && !size_hidden.modified);
+
+        let name_only_columns = project(kind_threshold - 0.1);
         assert!(!name_only_columns.kind && !name_only_columns.size && !name_only_columns.modified);
         assert!(name_only_columns.name_width >= MIN_NAME_CELL_WIDTH);
 
         let narrow = project(180.0);
         assert!(!narrow.kind && !narrow.size && !narrow.modified);
-        assert_eq!(
-            narrow.name_width,
-            180.0 - ROW_PADDING_X * 2.0 - ROW_CHECKBOX_WIDTH
-        );
+        assert_eq!(narrow.name_width, MIN_NAME_CELL_WIDTH);
 
         let wide = project(2500.0);
         assert!(wide.kind && wide.size && wide.modified);
-        assert_eq!(wide.name_width, MAX_NAME_CELL_WIDTH);
+        assert!(wide.name_width > all.name_width);
     }
 }

@@ -934,7 +934,6 @@ impl DemoEntry {
 
     /// 行の種類表示。並べ替えとグループ分けは拡張子の元の値を使う。
     fn kind_label(&self, translator: &Translator) -> String {
-        const MAX_UNKNOWN_EXTENSION_CHARS: usize = 6;
         if self.is_link() {
             return translator.text(Message::KindLink).into_owned();
         }
@@ -944,15 +943,7 @@ impl DemoEntry {
                 .extension()
                 .and_then(|ext| ext.to_str())
                 .filter(|ext| !ext.is_empty())
-                .map(|ext| {
-                    if ext.chars().count() > MAX_UNKNOWN_EXTENSION_CHARS
-                        && IconId::for_extension(ext) == IconId::File
-                    {
-                        translator.text(Message::KindUnknownExtension).into_owned()
-                    } else {
-                        ext.to_ascii_uppercase()
-                    }
-                })
+                .map(|ext| ext.to_ascii_uppercase())
                 .unwrap_or_else(|| translator.text(Message::KindFile).into_owned()),
         }
     }
@@ -3129,7 +3120,6 @@ fn search_field(
                         div()
                             .absolute()
                             .inset_0()
-                            .truncate()
                             .text_size(px(12.0))
                             .text_color(palette.text_muted)
                             .child(placeholder),
@@ -12813,7 +12803,7 @@ impl DirectoryListDemo {
         self.measured[row] = true;
     }
 
-    /// 行内で最も高い名前に合わせた label の高さ。
+    /// 行内で最も高い名前や詳細列に合わせた label の高さ。
     fn row_names_label_height(&self, row: usize, width: f32, window: &Window) -> f32 {
         let text_width = self.item_name_text_width(width);
         self.row_entries(row)
@@ -12830,11 +12820,38 @@ impl DirectoryListDemo {
                     })
                     .map_or(entry.name.as_str(), |pending| &pending.committed_name);
                 let name = single_paragraph(name);
-                self.shaped_name_height(&name, text_width, window)
+                let name = self.shaped_name_height(&name, text_width, window);
+                name.into_iter()
+                    .chain(self.shaped_detail_heights(index, window))
+                    .reduce(f32::max)
             })
             .fold(self.layout.row_label_height(), |height, name| {
                 height.max(name + CELL_PADDING_Y * 2.0)
             })
+    }
+
+    /// 行表示の詳細列も省略せず折り返すので、その高さを測る。
+    fn shaped_detail_heights(&self, index: usize, window: &Window) -> Vec<f32> {
+        if self.layout != ViewLayout::Rows {
+            return Vec::new();
+        }
+        let prefs = self.effective_column_prefs();
+        let columns = self.row_columns_for_width(self.layout_width, prefs);
+        let Some(details) = self.row_details.get(&self.entries[index].key) else {
+            return Vec::new();
+        };
+        columns
+            .visible_columns()
+            .filter_map(|column| {
+                let (text, width) = match column {
+                    Column::Name => return None,
+                    Column::Kind => (&details.kind, prefs.kind_width),
+                    Column::Size => (&details.size, prefs.size_width),
+                    Column::Modified => (&details.modified, prefs.modified_width),
+                };
+                self.shaped_name_height(text, (width - CELL_PADDING_X * 2.0).max(1.0), window)
+            })
+            .collect()
     }
 
     fn grid_cell_width(&self, width: f32) -> f32 {
