@@ -1,4 +1,4 @@
-use std::{ffi::OsString, mem::ManuallyDrop, os::windows::ffi::OsStringExt};
+use std::{ffi::OsString, mem::ManuallyDrop};
 
 use gpui::Window;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -19,8 +19,7 @@ use windows_062::{
             Shell::{
                 DefSubclassProc,
                 PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow},
-                RemoveWindowSubclass, SHGSI_ICONLOCATION, SHGetStockIconInfo, SHSTOCKICONINFO,
-                SHStrDupW, SIID_APPLICATION, SetCurrentProcessExplicitAppUserModelID,
+                RemoveWindowSubclass, SHStrDupW, SetCurrentProcessExplicitAppUserModelID,
                 SetWindowSubclass,
             },
             WindowsAndMessaging::WM_NCDESTROY,
@@ -49,26 +48,22 @@ pub(crate) fn configure_window(window: &Window) {
         return;
     };
     let hwnd = HWND(handle.hwnd.get() as *mut _);
+    let launcher = root.join("expos.exe");
     let mut command = OsString::from("\"");
-    command.push(root.join("expos.exe"));
+    command.push(&launcher);
     command.push("\"");
+    // ランチャーに埋め込んだ先頭のアイコンを使う。
+    let mut icon_resource = launcher.into_os_string();
+    icon_resource.push(",0");
 
-    if let Err(error) = set_relaunch_properties(hwnd, HSTRING::from(&command)) {
+    if let Err(error) =
+        set_relaunch_properties(hwnd, HSTRING::from(&command), HSTRING::from(&icon_resource))
+    {
         eprintln!("[expos][taskbar] could not set window relaunch properties: {error}");
     }
 }
 
-fn set_relaunch_properties(hwnd: HWND, command: HSTRING) -> Result<()> {
-    // ランチャーにはアイコンがないので、Windows の既定のアプリアイコンを使う。
-    let mut icon = SHSTOCKICONINFO {
-        cbSize: std::mem::size_of::<SHSTOCKICONINFO>() as u32,
-        ..Default::default()
-    };
-    unsafe { SHGetStockIconInfo(SIID_APPLICATION, SHGSI_ICONLOCATION, &mut icon)? };
-    let icon_path = icon.szPath.split(|&unit| unit == 0).next().unwrap_or(&[]);
-    let mut icon_resource = OsString::from_wide(icon_path);
-    icon_resource.push(format!(",{}", icon.iIcon));
-
+fn set_relaunch_properties(hwnd: HWND, command: HSTRING, icon_resource: HSTRING) -> Result<()> {
     let store: IPropertyStore = unsafe { SHGetPropertyStoreForWindow(hwnd)? };
     // HWND の破棄前にプロパティを解放できるよう、作成した UI スレッドで登録する。
     unsafe { SetWindowSubclass(hwnd, Some(on_window_message), 0, 0).ok()? };
@@ -80,10 +75,7 @@ fn set_relaunch_properties(hwnd: HWND, command: HSTRING) -> Result<()> {
             PKEY_AppUserModel_RelaunchDisplayNameResource,
             HSTRING::from(env!("CARGO_PKG_NAME")),
         ),
-        (
-            PKEY_AppUserModel_RelaunchIconResource,
-            HSTRING::from(&icon_resource),
-        ),
+        (PKEY_AppUserModel_RelaunchIconResource, icon_resource),
         (PKEY_AppUserModel_ID, HSTRING::from(APP_USER_MODEL_ID)),
     ];
     for (key, value) in properties {

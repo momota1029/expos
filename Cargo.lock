@@ -1606,6 +1606,7 @@ dependencies = [
  "async-lock",
  "chrono",
  "crc32fast",
+ "embed-resource",
  "encoding_rs",
  "everything-ipc",
  "flate2",
@@ -1642,6 +1643,7 @@ dependencies = [
 name = "expos-launcher"
 version = "0.1.0"
 dependencies = [
+ "embed-resource",
  "install-layout",
  "windows 0.62.2",
 ]

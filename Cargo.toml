@@ -8,6 +8,9 @@ default-run = "expos"
 [features]
 everything-private-ipc-test = []
 
+[build-dependencies]
+embed-resource = "3.0.6"
+
 [dependencies]
 async-lock = "3.4"
 async-channel = "2.5"
