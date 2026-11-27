@@ -102,45 +102,6 @@ fn filename_with_tooltip(
     })
 }
 
-fn filename_extension_start(name: &str) -> usize {
-    name.rfind('.')
-        .filter(|&dot| dot > 0 && dot + 1 < name.len())
-        .unwrap_or(name.len())
-}
-
-fn filename_break(name: &str, stem_end: usize, fits: impl Fn(&str) -> bool) -> usize {
-    if fits(name) {
-        return name.len();
-    }
-
-    // 最後のピリオドは拡張子に含め、途中のピリオドだけを区切り候補にする。
-    let boundaries: Vec<_> = name[..stem_end]
-        .char_indices()
-        .map(|(offset, ch)| (offset + ch.len_utf8(), ch))
-        .collect();
-    let fitted = boundaries.partition_point(|&(end, _)| fits(&name[..end]));
-    let Some(&(last_fit, _)) = boundaries[..fitted].last() else {
-        return 0;
-    };
-    let preferred = boundaries[..fitted]
-        .iter()
-        .rfind(|&&(end, ch)| {
-            matches!(ch, '-' | '_' | ' ')
-                || (ch == '.' && end > 1)
-                || matches!(ch as u32,
-                    0x1100..=0x11FF | 0x3040..=0x30FF | 0x3100..=0x318F
-                    | 0x31A0..=0x31BF | 0x31F0..=0x31FF | 0x3400..=0x9FFF
-                    | 0xA960..=0xA97F | 0xAC00..=0xD7FF | 0xF900..=0xFAFF
-                    | 0xFF66..=0xFF9D | 0x1AFF0..=0x1B16F | 0x20000..=0x323AF)
-        })
-        .map_or(last_fit, |&(end, _)| end);
-    if preferred != last_fit && !fits(&name[preferred..]) && fits(&name[last_fit..]) {
-        // 区切り位置を優先しつつ、二行で名前全体が見える場合は省略を避ける。
-        return last_fit;
-    }
-    preferred
-}
-
 #[derive(IntoElement)]
 struct GridFilename {
     full_name: SharedString,
@@ -149,91 +110,22 @@ struct GridFilename {
     tooltip: Option<(usize, gpui::WeakEntity<DirectoryListDemo>)>,
 }
 
-impl GridFilename {
-    fn runs(&self, range: Range<usize>, style: &gpui::TextStyle) -> Vec<gpui::TextRun> {
-        let Some((matched, color)) = &self.highlight else {
-            return vec![style.to_run(range.len())];
-        };
-        let start = range.start.max(matched.start);
-        let end = range.end.min(matched.end);
-        if start >= end {
-            return vec![style.to_run(range.len())];
-        }
-        let mut highlight = style.to_run(end - start);
-        highlight.background_color = Some(*color);
-        vec![
-            style.to_run(start - range.start),
-            highlight,
-            style.to_run(range.end - end),
-        ]
-    }
-
-    fn text(&self, window: &Window, cx: &App) -> gpui::StyledText {
-        let name = self.full_name.replace(['\r', '\n'], " ");
-        let style = window.text_style();
-        let font_size = px(NAME_FONT_SIZE);
-        let measure = |text: &str| {
-            window
-                .text_system()
-                .layout_line(text, font_size, &[style.to_run(text.len())], None)
-                .width
-        };
-        let fits = |text: &str| measure(text) <= self.width;
-        let stem_end = filename_extension_start(&name);
-        let split = filename_break(&name, stem_end, fits);
-        let tail = &name[split..];
-        let mut text = name[..split].to_owned();
-        let mut runs = self.runs(0..split, &style);
-        if !text.is_empty() && !tail.is_empty() {
-            text.push('\n');
-            runs.push(style.to_run(1));
-        }
-        if fits(tail) {
-            text.push_str(tail);
-            runs.extend(self.runs(split..name.len(), &style));
-        } else {
-            let extension = &name[stem_end..];
-            let extension_width = measure(extension);
-            // Rows と同じ GPUI の中央省略を使う。拡張子は収まる限り先に幅を確保する。
-            let keep_extension =
-                !extension.is_empty() && measure("…") + extension_width <= self.width;
-            let end = if keep_extension { stem_end } else { name.len() };
-            let target_width = if keep_extension {
-                self.width - extension_width
-            } else {
-                self.width
-            };
-            let tail_runs = self.runs(split..end, &style);
-            let (shortened, shortened_runs) = cx
-                .text_system()
-                .line_wrapper(style.font(), font_size)
-                .truncate_line(
-                    name[split..end].into(),
-                    target_width,
-                    "…",
-                    &tail_runs,
-                    gpui::TruncateFrom::Middle,
-                );
-            text.push_str(&shortened);
-            runs.extend(shortened_runs.iter().cloned());
-            if keep_extension {
-                text.push_str(extension);
-                runs.extend(self.runs(stem_end..name.len(), &style));
-            }
-        }
-        runs.retain(|run| run.len > 0);
-        gpui::StyledText::new(text).with_runs(runs)
-    }
-}
-
 impl gpui::RenderOnce for GridFilename {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let text = self.text(window, cx);
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        // 名前は省略せず、行の高さは測定側が折り返し行数に合わせる。
+        let mut text = gpui::StyledText::new(single_paragraph(&self.full_name));
+        if let Some((range, color)) = self.highlight {
+            text = text.with_highlights([(
+                range,
+                gpui::HighlightStyle {
+                    background_color: Some(color),
+                    ..Default::default()
+                },
+            )]);
+        }
         div()
             .max_w(self.width)
-            .max_h(px(NAME_LINE_HEIGHT * GRID_NAME_LINES))
-            .overflow_hidden()
-            .whitespace_nowrap()
+            .whitespace_normal()
             .child(match self.tooltip {
                 Some((index, view)) => {
                     filename_with_tooltip(("grid-filename", index), text, self.full_name, view)
@@ -766,18 +658,9 @@ impl DirectoryListDemo {
                 self.render_inline_rename_input(index, input, cx)
             } else {
                 let full_name: SharedString = display_name.into();
-                // Nowrap は明示的な改行を消さない。表示だけを一行にし、tooltip には元の名前を渡す。
-                let label: SharedString = if full_name.contains(['\r', '\n']) {
-                    full_name.replace(['\r', '\n'], " ").into()
-                } else {
-                    full_name.clone()
-                };
-                let line = div()
-                    .w_full()
-                    .h(px(NAME_LINE_HEIGHT))
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis_middle();
+                // 明示的な改行は表示だけ空白にし、tooltip には元の名前を渡す。
+                let label = single_paragraph(&full_name);
+                let line = div().w_full().whitespace_normal();
                 if measuring {
                     line.child(label).into_any_element()
                 } else {
@@ -808,9 +691,8 @@ impl DirectoryListDemo {
                 .relative()
                 .w(px(columns.name_width))
                 .flex_shrink_0()
+                // 折り返した名前と入力欄の高さを行に反映する。
                 .min_h(px(ESTIMATED_ROW_HEIGHT))
-                .when(!renaming, |name| name.h(px(ESTIMATED_ROW_HEIGHT)))
-                // 名前変更中だけ入力欄の折り返し高を行に反映する。
                 .self_start()
                 .px(px(CELL_PADDING_X))
                 .py(px(CELL_PADDING_Y))
@@ -950,7 +832,7 @@ impl DirectoryListDemo {
             let name = self.item_surface(index, "row-name", name, measuring, cx);
             let row = base
                 .overflow_hidden()
-                .when(!renaming, |row| row.h(px(ESTIMATED_ROW_HEIGHT)))
+                .min_h(px(ESTIMATED_ROW_HEIGHT))
                 .child(leading)
                 .child(name)
                 .child(trailing);
@@ -1157,7 +1039,6 @@ impl DirectoryListDemo {
             .when(renaming && icons, |label| label.w_full())
             .when(renaming && !icons, |label| label.flex_1())
             .min_h(px(GRID_LABEL_HEIGHT))
-            .when(!renaming, |label| label.h(px(GRID_LABEL_HEIGHT)))
             .px(px(GRID_NAME_PADDING_X))
             .flex()
             .when(icons && !renaming, |label| {

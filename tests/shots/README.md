@@ -61,7 +61,7 @@ The viewport is 1280 × 800 except for `narrow` at 640 × 700,
 | `views-rich.json` | `rich` | `views-rich-rows-top`, `views-rich-rows-scrolled`, `views-rich-tiles-top`, `views-rich-tiles-scrolled`, `views-rich-icons-top`, `views-rich-icons-scrolled` |
 | `icons-thumbs.json` | `rich` | `icons-thumbs-1280`, `icons-thumbs-1920`, `icons-thumbs-min-zoom`, `icons-thumbs-tiles` |
 | `rows-stripes.json` | `rich` | `rows-stripes-top`, `rows-stripes-scrolled` |
-| `long-names.json` | `rich` | `long-names-rows`, `long-names-tiles` |
+| `long-names.json` | `rich` | `long-names-rows`, `long-names-tiles`, `long-names-icons` |
 | `narrow.json` | `rich` | `narrow-rows`, `narrow-tiles` |
 | `hover.json` | `basic` | `hover-row`, `hover-layout-button`, `hover-group-button`, `hover-tab`, `hover-cleared` |
 | `selection.json` | `basic` | `selection-range`, `selection-all` |

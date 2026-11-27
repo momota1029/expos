@@ -63,6 +63,10 @@ const ICON_CHECKBOX_HIT_OFFSET: f32 =
 const ICON_BOX_PADDING: f32 = 4.0;
 const ICON_CHECKBOX_OVERHANG: f32 = ICON_CHECKBOX_HIT_OFFSET - ICON_BOX_PADDING;
 
+fn single_paragraph(name: &str) -> SharedString {
+    name.replace(['\r', '\n'], " ").into()
+}
+
 fn verify_row_heights() -> bool {
     static VERIFY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *VERIFY.get_or_init(|| std::env::var_os("GPUI_FILER_VERIFY_HEIGHTS").is_some())
@@ -1248,6 +1252,7 @@ struct DirectoryListDemo {
     measured_viewport_width: Option<f32>,
     viewport_reconcile_scheduled: Rc<Cell<bool>>,
     measured: Vec<bool>,
+    measured_name_width: f32,
     focus_handle: gpui::FocusHandle,
     last_click_was_blank: bool,
     /// 読取ライフサイクルの唯一の owner。location / status / last-good を持つ。
@@ -1965,11 +1970,7 @@ fn drag_preview_contents(text: &str, icons: &[IconId], foreground: gpui::Rgba) -
             div()
                 .flex_1()
                 .min_w(px(0.0))
-                .max_h(px(NAME_LINE_HEIGHT * 2.0))
-                .overflow_hidden()
                 .whitespace_normal()
-                .line_clamp(2)
-                .text_ellipsis()
                 .text_size(px(NAME_FONT_SIZE))
                 .line_height(px(NAME_LINE_HEIGHT))
                 .child(text.to_owned()),
@@ -3999,7 +4000,8 @@ impl DirectoryListDemo {
                 );
             }
         }
-        self.measured = vec![!verify_row_heights(); rows];
+        // 名前の折り返し行数は可視行になった時点で測る。
+        self.measured = vec![false; rows];
     }
 
     fn rebuild_projected_rows(&mut self) {
@@ -6359,6 +6361,7 @@ impl DirectoryListDemo {
             measured_viewport_width: None,
             viewport_reconcile_scheduled: Rc::new(Cell::new(false)),
             measured: Vec::new(),
+            measured_name_width: 0.0,
             focus_handle: cx.focus_handle(),
             last_click_was_blank: false,
             session,
@@ -12673,6 +12676,12 @@ impl DirectoryListDemo {
                 self.pending_projection_anchor = resize_anchor;
             }
         }
+        // 列幅や checkbox の切替でも折り返し位置が変わる。
+        let name_width = self.item_name_text_width(width);
+        if name_width != self.measured_name_width {
+            self.measured_name_width = name_width;
+            self.measured.fill(false);
+        }
         // projection 差替え時は先に対象行を可視範囲へ入れる。
         // rename reconciliation はここで一度動かすと、実測後にももう一度戻るため
         // 最終測定まで defer する。
@@ -12769,7 +12778,7 @@ impl DirectoryListDemo {
                     input.update(cx, |input, _| input.set_expected_height(px(height)));
                     (height + CELL_PADDING_Y * 2.0).max(normal_label_height)
                 }),
-            None => Some(normal_label_height),
+            None => Some(self.row_names_label_height(row, width, window)),
         };
         let reserved = label_height.map(|label_height| {
             self.projected_rows[row].height(self.layout, self.icon_scale, label_height)
@@ -12802,6 +12811,30 @@ impl DirectoryListDemo {
         };
         self.heights.set_content(row..row + 1, measured);
         self.measured[row] = true;
+    }
+
+    /// 行内で最も高い名前に合わせた label の高さ。
+    fn row_names_label_height(&self, row: usize, width: f32, window: &Window) -> f32 {
+        let text_width = self.item_name_text_width(width);
+        self.row_entries(row)
+            .filter_map(|index| {
+                let entry = &self.entries[index];
+                // 名前変更の確定直後は、表示している確定名で測る。
+                let name = self
+                    .pending_rename_geometry
+                    .as_ref()
+                    .filter(|pending| {
+                        pending.key == entry.key
+                            && pending.location_generation == self.location_generation
+                            && pending.presentation_revision == self.presentation_revision
+                    })
+                    .map_or(entry.name.as_str(), |pending| &pending.committed_name);
+                let name = single_paragraph(name);
+                self.shaped_name_height(&name, text_width, window)
+            })
+            .fold(self.layout.row_label_height(), |height, name| {
+                height.max(name + CELL_PADDING_Y * 2.0)
+            })
     }
 
     fn grid_cell_width(&self, width: f32) -> f32 {
@@ -14964,15 +14997,20 @@ mod layout_tests {
                 for grouping in [GroupBy::Kind, GroupBy::ModifiedDate] {
                     view.group_by = grouping;
                     view.apply_group_order();
-                    for layout in [ViewLayout::Tiles, ViewLayout::Icons] {
+                    for layout in [ViewLayout::Rows, ViewLayout::Tiles, ViewLayout::Icons] {
                         for scale in [0.75, 1.0, 1.25, 2.5] {
                             view.layout = layout;
                             view.icon_scale = scale;
                             view.columns = layout.columns(width, scale, view.item_check_boxes);
                             view.layout_width = width;
                             view.reset_projected_rows();
+                            // 名前の折り返しは実測で反映する。
+                            for row in 0..view.projected_rows.len() {
+                                view.measure_row_height(row, width, window, cx);
+                            }
+                            view.measured_name_width = view.item_name_text_width(width);
                             let rows = &view.projected_rows;
-                            if grouping == GroupBy::Kind {
+                            if grouping == GroupBy::Kind && layout != ViewLayout::Rows {
                                 assert!(rows.iter().any(|row| {
                                     matches!(row, ProjectedRow::CategoryStrip { .. })
                                 }));
@@ -15005,9 +15043,7 @@ mod layout_tests {
                             }
                             assert_eq!(view.heights.total_height(), rendered_bottom);
                             let (_, measured_rows) = view.prepare_layout(window, cx);
-                            if !verify_row_heights() {
-                                assert_eq!(measured_rows, 0);
-                            }
+                            assert_eq!(measured_rows, 0);
                             assert_eq!(view.heights.total_height(), rendered_bottom);
                         }
                     }
